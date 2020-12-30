@@ -1,12 +1,12 @@
 [package]
-name = "n5"
-version = "0.7.6"
+name = "ngpre"
+version = "0.0.1"
 edition = "2018"
 license = "MIT/Apache-2.0"
-authors = ["Andrew Champion <andrew.champion@gmail.com>"]
-description = "Rust implementation of the N5 tensor file system format"
+authors = ["Tom Kazimiers <tom@voodoo-arts.net>", "Andrew Champion <andrew.champion@gmail.com>"]
+description = "Rust implementation of the Neuroglancer Precomputed tensor file format"
 readme = "README.md"
-repository = "https://github.com/aschampion/rust-n5"
+repository = "https://github.com/tomka/rust-ngpre"
 keywords = ["tensor"]
 categories = ["encoding", "filesystem", "science"]
 

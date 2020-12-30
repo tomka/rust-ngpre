@@ -1,4 +1,4 @@
-//! A filesystem-backed N5 container.
+//! A filesystem-backed NgPre container.
 
 use std::fs::{
     self,
@@ -35,9 +35,9 @@ use crate::{
     DefaultBlockReader,
     DefaultBlockWriter,
     GridCoord,
-    N5Lister,
-    N5Reader,
-    N5Writer,
+    NgPreLister,
+    NgPreReader,
+    NgPreWriter,
     ReadableDataBlock,
     ReflectedType,
     ReinitDataBlock,
@@ -51,16 +51,16 @@ use crate::{
 const ATTRIBUTES_FILE: &str = "attributes.json";
 
 
-/// A filesystem-backed N5 container.
+/// A filesystem-backed NgPre container.
 #[derive(Clone, Debug)]
-pub struct N5Filesystem {
+pub struct NgPreFilesystem {
     base_path: PathBuf,
 }
 
-impl N5Filesystem {
-    /// Open an existing N5 container by path.
-    pub fn open<P: AsRef<std::path::Path>>(base_path: P) -> Result<N5Filesystem> {
-        let reader = N5Filesystem {
+impl NgPreFilesystem {
+    /// Open an existing NgPre container by path.
+    pub fn open<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+        let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
 
@@ -75,11 +75,11 @@ impl N5Filesystem {
         Ok(reader)
     }
 
-    /// Open an existing N5 container by path or create one if none exists.
+    /// Open an existing NgPre container by path or create one if none exists.
     ///
     /// Note this will update the version attribute for existing containers.
-    pub fn open_or_create<P: AsRef<std::path::Path>>(base_path: P) -> Result<N5Filesystem> {
-        let reader = N5Filesystem {
+    pub fn open_or_create<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+        let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
 
@@ -112,7 +112,7 @@ impl N5Filesystem {
         }
     }
 
-    /// Get the filesystem path for a given N5 data path.
+    /// Get the filesystem path for a given NgPre data path.
     fn get_path(&self, path_name: &str) -> Result<PathBuf> {
         // Note: cannot use `canonicalize` on both the constructed dataset path
         // and `base_path` and check `starts_with`, because `canonicalize` also
@@ -125,7 +125,7 @@ impl N5Filesystem {
             match components.next() {
                 Some(Component::Prefix(_)) => return Err(Error::new(
                     ErrorKind::NotFound,
-                    "Path name is outside this N5 filesystem on a prefix path")),
+                    "Path name is outside this NgPre filesystem on a prefix path")),
                 Some(Component::RootDir) => (),
                 // This should be unreachable.
                 _ => return Err(Error::new(ErrorKind::NotFound, "Path is malformed")),
@@ -146,7 +146,7 @@ impl N5Filesystem {
         }
 
         if nest < 0 {
-            Err(Error::new(ErrorKind::NotFound, "Path name is outside this N5 filesystem"))
+            Err(Error::new(ErrorKind::NotFound, "Path name is outside this NgPre filesystem"))
         } else {
             Ok(self.base_path.join(unrooted_path))
         }
@@ -167,7 +167,7 @@ impl N5Filesystem {
     }
 }
 
-impl N5Reader for N5Filesystem {
+impl NgPreReader for NgPreFilesystem {
     fn get_version(&self) -> Result<Version> {
         // TODO: dedicated error type should clean this up.
         Ok(Version::from_str(self
@@ -271,7 +271,7 @@ impl N5Reader for N5Filesystem {
     }
 }
 
-impl N5Lister for N5Filesystem {
+impl NgPreLister for NgPreFilesystem {
     fn list(&self, path_name: &str) -> Result<Vec<String>> {
         // TODO: shouldn't do this in a closure to not equivocate errors with Nones.
         Ok(fs::read_dir(self.get_path(path_name)?)?
@@ -304,7 +304,7 @@ fn merge_top_level(a: &mut Value, b: serde_json::Map<String, Value>) {
     }
 }
 
-impl N5Writer for N5Filesystem {
+impl NgPreWriter for NgPreFilesystem {
     fn set_attributes(
         &self,
         path_name: &str,
@@ -408,33 +408,33 @@ impl N5Writer for N5Filesystem {
 mod tests {
     use super::*;
     use crate::test_backend;
-    use crate::tests::{ContextWrapper, N5Testable};
+    use crate::tests::{ContextWrapper, NgPreTestable};
     use tempdir::TempDir;
 
-    impl crate::tests::N5Testable for N5Filesystem {
-        type Wrapper = ContextWrapper<TempDir, N5Filesystem>;
+    impl crate::tests::NgPreTestable for NgPreFilesystem {
+        type Wrapper = ContextWrapper<TempDir, NgPreFilesystem>;
 
         fn temp_new_rw() -> Self::Wrapper {
-            let dir = TempDir::new("rust_n5_tests").unwrap();
-            let n5 = N5Filesystem::open_or_create(dir.path())
-                .expect("Failed to create N5 filesystem");
+            let dir = TempDir::new("rust_ngpre_tests").unwrap();
+            let ngpre = NgPreFilesystem::open_or_create(dir.path())
+                .expect("Failed to create NgPre filesystem");
 
             ContextWrapper {
                 context: dir,
-                n5,
+                ngpre,
             }
         }
 
         fn open_reader(&self) -> Self {
-            N5Filesystem::open(&self.base_path).unwrap()
+            NgPreFilesystem::open(&self.base_path).unwrap()
         }
     }
 
-    test_backend!(N5Filesystem);
+    test_backend!(NgPreFilesystem);
 
     #[test]
     fn reject_exterior_paths() {
-        let wrapper = N5Filesystem::temp_new_rw();
+        let wrapper = NgPreFilesystem::temp_new_rw();
         let create = wrapper.as_ref();
 
         assert!(create.get_path("/").is_ok());
@@ -451,23 +451,23 @@ mod tests {
 
     #[test]
     fn accept_hardlink_attributes() {
-        let wrapper = N5Filesystem::temp_new_rw();
-        let dir = TempDir::new("rust_n5_tests_dupe").unwrap();
+        let wrapper = NgPreFilesystem::temp_new_rw();
+        let dir = TempDir::new("rust_ngpre_tests_dupe").unwrap();
         let mut attr_path = dir.path().to_path_buf();
         attr_path.push(ATTRIBUTES_FILE);
 
-        std::fs::hard_link(wrapper.n5.get_attributes_path("").unwrap(), &attr_path).unwrap();
+        std::fs::hard_link(wrapper.ngpre.get_attributes_path("").unwrap(), &attr_path).unwrap();
 
-        wrapper.n5.set_attribute("", "foo".into(), "bar").unwrap();
+        wrapper.ngpre.set_attribute("", "foo".into(), "bar").unwrap();
 
-        let dupe = N5Filesystem::open(dir.path()).unwrap();
+        let dupe = NgPreFilesystem::open(dir.path()).unwrap();
         assert_eq!(dupe.get_attributes("").unwrap()["foo"], "bar");
     }
 
     #[test]
     fn list_symlinked_datasets() {
-        let wrapper = N5Filesystem::temp_new_rw();
-        let dir = TempDir::new("rust_n5_tests_dupe").unwrap();
+        let wrapper = NgPreFilesystem::temp_new_rw();
+        let dir = TempDir::new("rust_ngpre_tests_dupe").unwrap();
         let mut linked_path = wrapper.context.path().to_path_buf();
         linked_path.push("linked_dataset");
 
@@ -476,8 +476,8 @@ mod tests {
         #[cfg(target_family = "windows")]
         std::os::windows::fs::symlink_dir(dir.path(), &linked_path).unwrap();
 
-        assert_eq!(wrapper.n5.list("").unwrap(), vec!["linked_dataset"]);
-        assert!(wrapper.n5.exists("linked_dataset").unwrap());
+        assert_eq!(wrapper.ngpre.list("").unwrap(), vec!["linked_dataset"]);
+        assert!(wrapper.ngpre.exists("linked_dataset").unwrap());
 
         let data_attrs = DatasetAttributes::new(
             smallvec![10, 10, 10],
@@ -485,25 +485,25 @@ mod tests {
             crate::DataType::INT32,
             crate::compression::CompressionType::Raw(crate::compression::raw::RawCompression::default()),
         );
-        wrapper.n5.create_dataset("linked_dataset", &data_attrs)
+        wrapper.ngpre.create_dataset("linked_dataset", &data_attrs)
             .expect("Failed to create dataset");
-        assert!(wrapper.n5.dataset_exists("linked_dataset").unwrap());
+        assert!(wrapper.ngpre.dataset_exists("linked_dataset").unwrap());
     }
 
     #[test]
     fn test_get_block_uri() {
-        let dir = TempDir::new("rust_n5_tests").unwrap();
+        let dir = TempDir::new("rust_ngpre_tests").unwrap();
         let path_str = dir.path().to_str().unwrap();
 
-        let create = N5Filesystem::open_or_create(path_str)
-            .expect("Failed to create N5 filesystem");
+        let create = NgPreFilesystem::open_or_create(path_str)
+            .expect("Failed to create NgPre filesystem");
         let uri = create.get_block_uri("foo/bar", &vec![1, 2, 3]).unwrap();
         assert_eq!(uri, format!("file://{}/foo/bar/1/2/3", path_str));
     }
 
     #[test]
     pub(crate) fn short_block_truncation() {
-        let wrapper = N5Filesystem::temp_new_rw();
+        let wrapper = NgPreFilesystem::temp_new_rw();
         let create = wrapper.as_ref();
         let data_attrs = DatasetAttributes::new(
             smallvec![10, 10, 10],

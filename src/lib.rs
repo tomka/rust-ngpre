@@ -1,6 +1,6 @@
-//! Interfaces for the [N5 "Not HDF5" n-dimensional tensor file system storage
-//! format](https://github.com/saalfeldlab/n5) created by the Saalfeld lab at
-//! Janelia Research Campus.
+//! Interfaces for the [Neuroglancer Precomputed  n-dimensional tensor file storage
+//! format](https://github.com/google/neuroglancer/tree/master/src/neuroglancer/datasource/precomputed)
+//! created by Jeremy Maitin-Shepard at Google.
 
 #![deny(missing_debug_implementations)]
 #![forbid(unsafe_code)]
@@ -23,9 +23,10 @@ use std::io::{
 };
 use std::marker::PhantomData;
 use std::time::SystemTime;
+use std::mem::size_of;
 
 use byteorder::{
-    BigEndian,
+    LittleEndian,
     ByteOrder,
     ReadBytesExt,
     WriteBytesExt,
@@ -59,26 +60,52 @@ const COORD_SMALLVEC_SIZE: usize = 6;
 pub type CoordVec<T> = SmallVec<[T; COORD_SMALLVEC_SIZE]>;
 pub type BlockCoord = CoordVec<u32>;
 pub type GridCoord = CoordVec<u64>;
+pub type OffsetCoord = CoordVec<i32>;
+pub type ChunkSize = CoordVec<u32>;
+pub type ResolutionType = CoordVec<f32>;
 
-type N5Endian = BigEndian;
+/// Data types representable in NgPre.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum DatasetType {
+    IMAGE,
+}
 
-/// Version of the Java N5 spec supported by this library.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Encoding {
+    RAW,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ScaleEntry {
+    pub chunk_sizes: Vec<ChunkSize>,
+    pub encoding: Encoding,
+    pub key: String,
+    pub resolution: ResolutionType,
+    pub size: GridCoord,
+    pub voxel_offset: OffsetCoord,
+}
+
+type NgPreEndian = LittleEndian;
+
+/// Version of the Neuroglancer spec supported by this library.
 pub const VERSION: Version = Version {
     major: 2,
-    minor: 1,
-    patch: 3,
+    minor: 3,
+    patch: 0,
     pre: Vec::new(),
     build: Vec::new(),
 };
 
-/// Determines whether a version of an N5 implementation is capable of accessing
-/// a version of an N5 container (`other`).
+/// Determines whether a version of an NgPre implementation is capable of accessing
+/// a version of an NgPre container (`other`).
 pub fn is_version_compatible(s: &Version, other: &Version) -> bool {
     other.major <= s.major
 }
 
 /// Key name for the version attribute in the container root.
-pub const VERSION_ATTRIBUTE_KEY: &str = "n5";
+pub const VERSION_ATTRIBUTE_KEY: &str = "ngpre";
 
 /// Container metadata about a data block.
 ///
@@ -93,9 +120,9 @@ pub struct DataBlockMetadata {
     pub size: Option<u64>,
 }
 
-/// Non-mutating operations on N5 containers.
-pub trait N5Reader {
-    /// Get the N5 specification version of the container.
+/// Non-mutating operations on NgPre containers.
+pub trait NgPreReader {
+    /// Get the NgPre specification version of the container.
     fn get_version(&self) -> Result<Version, Error>;
 
     /// Get attributes for a dataset.
@@ -147,14 +174,14 @@ pub trait N5Reader {
     fn list_attributes(&self, path_name: &str) -> Result<serde_json::Value, Error>;
 }
 
-/// Non-mutating operations on N5 containers that support group discoverability.
-pub trait N5Lister : N5Reader {
+/// Non-mutating operations on NgPre containers that support group discoverability.
+pub trait NgPreLister : NgPreReader {
     /// List all groups (including datasets) in a group.
     fn list(&self, path_name: &str) -> Result<Vec<String>, Error>;
 }
 
-/// Mutating operations on N5 containers.
-pub trait N5Writer : N5Reader {
+/// Mutating operations on NgPre containers.
+pub trait NgPreWriter : NgPreReader {
     /// Set a single attribute.
     fn set_attribute<T: Serialize>(
         &self, // TODO: should this be mut for semantics?
@@ -201,7 +228,7 @@ pub trait N5Writer : N5Reader {
         self.set_dataset_attributes(path_name, data_attrs)
     }
 
-    /// Remove the N5 container.
+    /// Remove the NgPre container.
     fn remove_all(&self) -> Result<(), Error> {
         self.remove("")
     }
@@ -239,82 +266,107 @@ fn u64_ceil_div(a: u64, b: u64) -> u64 {
 
 /// Attributes of a tensor dataset.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct DatasetAttributes {
-    /// Dimensions of the entire dataset, in voxels.
-    dimensions: GridCoord,
-    /// Size of each block, in voxels.
-    block_size: BlockCoord,
     /// Element data type.
     data_type: DataType,
+    /// Dataset type
+    r#type: DatasetType,
+    /// Scale levels
+    scales: Vec<ScaleEntry>,
+    /// Number of channels
+    num_channels: u32,
+
     /// Compression scheme for voxel data in each block.
+    #[serde(skip_serializing)]
+    #[serde(default = "compression::CompressionType::default")]
     compression: compression::CompressionType,
+
+    ///// Dimensions of the entire dataset, in voxels.
+    //dimensions: GridCoord,
+    ///// Size of each block, in voxels.
+    //block_size: BlockCoord,
 }
 
 impl DatasetAttributes {
     pub fn new(
-        dimensions: GridCoord,
-        block_size: BlockCoord,
         data_type: DataType,
+        r#type: DatasetType,
+        scales: Vec<ScaleEntry>,
+        num_channels: u32,
         compression: compression::CompressionType,
     ) -> DatasetAttributes {
-        assert_eq!(dimensions.len(), block_size.len(),
-            "Number of dataset dimensions must match number of block size dimensions.");
         DatasetAttributes {
-            dimensions,
-            block_size,
             data_type,
+            r#type,
+            scales,
+            num_channels,
             compression,
         }
-    }
-
-    pub fn get_dimensions(&self) -> &[u64] {
-        &self.dimensions
-    }
-
-    pub fn get_block_size(&self) -> &[u32] {
-        &self.block_size
-    }
-
-    pub fn get_data_type(&self) -> &DataType {
-        &self.data_type
     }
 
     pub fn get_compression(&self) -> &compression::CompressionType {
         &self.compression
     }
 
+    pub fn get_dimensions(&self) -> &[u64] {
+        &self.scales[0].size
+    }
+
+    pub fn get_block_size(&self) -> &[u32] {
+        &self.scales[0].chunk_sizes[0]
+    }
+
+    pub fn get_voxel_offset(&self) -> &[i32] {
+        &self.scales[0].voxel_offset
+    }
+
     pub fn get_ndim(&self) -> usize {
-        self.dimensions.len()
+        self.scales[0].size.len()
+    }
+
+    pub fn get_data_type(&self) -> &DataType {
+        &self.data_type
+    }
+
+    pub fn get_type(&self) -> &DatasetType {
+        &self.r#type
+    }
+
+    pub fn get_scales(&self) -> &Vec<ScaleEntry> {
+        &self.scales
+    }
+
+    pub fn get_num_channels(&self) -> u32 {
+        self.num_channels
     }
 
     /// Get the total number of elements possible given the dimensions.
     pub fn get_num_elements(&self) -> usize {
-        self.dimensions.iter().map(|&d| d as usize).product()
+        self.get_dimensions().iter().map(|&d| d as usize).product()
     }
 
     /// Get the total number of elements possible in a block.
     pub fn get_block_num_elements(&self) -> usize {
-        self.block_size.iter().map(|&d| d as usize).product()
+        self.get_block_size().iter().map(|&d| d as usize).product()
     }
 
     /// Get the upper bound extent of grid coordinates.
     pub fn get_grid_extent(&self) -> GridCoord {
-        self.dimensions.iter()
-            .zip(self.block_size.iter().cloned().map(u64::from))
+        self.get_dimensions().iter()
+            .zip(self.get_block_size().iter().cloned().map(u64::from))
             .map(|(d, b)| u64_ceil_div(*d, b))
             .collect()
     }
 
     /// Get the total number of blocks.
     /// ```
-    /// use n5::prelude::*;
-    /// use n5::smallvec::smallvec;
+    /// use ngpre::prelude::*;
+    /// use ngpre::smallvec::smallvec;
     /// let attrs = DatasetAttributes::new(
     ///     smallvec![50, 40, 30],
     ///     smallvec![11, 10, 10],
     ///     DataType::UINT8,
-    ///     n5::compression::CompressionType::default(),
+    ///     ngpre::compression::CompressionType::default(),
     /// );
     /// assert_eq!(attrs.get_num_blocks(), 60);
     /// ```
@@ -324,19 +376,19 @@ impl DatasetAttributes {
 
     /// Check whether a block grid position is in the bounds of this dataset.
     /// ```
-    /// use n5::prelude::*;
-    /// use n5::smallvec::smallvec;
+    /// use ngpre::prelude::*;
+    /// use ngpre::smallvec::smallvec;
     /// let attrs = DatasetAttributes::new(
     ///     smallvec![50, 40, 30],
     ///     smallvec![11, 10, 10],
     ///     DataType::UINT8,
-    ///     n5::compression::CompressionType::default(),
+    ///     ngpre::compression::CompressionType::default(),
     /// );
     /// assert!(attrs.in_bounds(&smallvec![4, 3, 2]));
     /// assert!(!attrs.in_bounds(&smallvec![5, 3, 2]));
     /// ```
     pub fn in_bounds(&self, grid_position: &GridCoord) -> bool {
-        self.dimensions.len() == grid_position.len() &&
+        self.get_dimensions().len() == grid_position.len() &&
         self.get_grid_extent().iter()
             .zip(grid_position.iter())
             .all(|(&bound, &coord)| coord < bound)
@@ -367,8 +419,8 @@ pub trait ReinitDataBlock<T> {
 pub trait ReadableDataBlock {
     /// Read data into this block from a source, overwriting any existing data.
     ///
-    /// Unlike Java N5, read the stream directly into the block data instead
-    /// of creating a copied byte buffer.
+    /// Read the stream directly into the block data instead of creating a copied
+    /// byte buffer.
     fn read_data<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
 }
 
@@ -380,7 +432,7 @@ pub trait WriteableDataBlock {
 
 /// Common interface for data blocks of element (rust) type `T`.
 ///
-/// To enable custom types to be written to N5 volumes, implement this trait.
+/// To enable custom types to be written to NgPre volumes, implement this trait.
 pub trait DataBlock<T> {
     fn get_size(&self) -> &[u32];
 
@@ -447,7 +499,7 @@ macro_rules! vec_data_block_impl {
     ($ty_name:ty, $bo_read_fn:ident, $bo_write_fn:ident) => {
         impl<C: AsMut<[$ty_name]>> ReadableDataBlock for SliceDataBlock<$ty_name, C> {
             fn read_data<R: std::io::Read>(&mut self, mut source: R) -> std::io::Result<()> {
-                source.$bo_read_fn::<N5Endian>(self.data.as_mut())
+                source.$bo_read_fn::<NgPreEndian>(self.data.as_mut())
             }
         }
 
@@ -459,7 +511,7 @@ macro_rules! vec_data_block_impl {
 
                 for c in self.data.as_ref().chunks(CHUNK) {
                     let byte_len = c.len() * std::mem::size_of::<$ty_name>();
-                    N5Endian::$bo_write_fn(c, &mut buf[..byte_len]);
+                    NgPreEndian::$bo_write_fn(c, &mut buf[..byte_len]);
                     target.write_all(&buf[..byte_len])?;
                 }
 
@@ -521,21 +573,17 @@ impl<T: ReflectedType, C: AsRef<[T]>> DataBlock<T> for SliceDataBlock<T, C> {
 const BLOCK_FIXED_LEN: u16 = 0;
 const BLOCK_VAR_LEN: u16 = 1;
 
+// https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/volume.md#chunk-encoding
 pub trait DefaultBlockHeaderReader<R: std::io::Read> {
     fn read_block_header(
-        buffer: &mut R,
         grid_position: GridCoord,
+        data_attrs: &DatasetAttributes,
     ) -> std::io::Result<BlockHeader> {
 
-        let mode = buffer.read_u16::<N5Endian>()?;
-        let ndim = buffer.read_u16::<N5Endian>()?;
-        let mut size = smallvec![0; ndim as usize];
-        buffer.read_u32_into::<N5Endian>(&mut size)?;
-        let num_el = match mode {
-            BLOCK_FIXED_LEN => size.iter().product(),
-            BLOCK_VAR_LEN => buffer.read_u32::<N5Endian>()?,
-            _ => return Err(Error::new(ErrorKind::InvalidData, "Unsupported block mode"))
-        };
+        let bs = data_attrs.get_block_size();
+        let nc = data_attrs.get_num_channels();
+        let size = smallvec![bs[0], bs[1], bs[2], nc];
+        let num_el = bs.iter().fold(1,|a, &b| a * b);
 
         Ok(BlockHeader {
             size,
@@ -559,10 +607,10 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
                 ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
-        let header = Self::read_block_header(&mut buffer, grid_position)?;
+        let header = Self::read_block_header(grid_position, data_attrs)?;
 
         let mut block = T::create_data_block(header);
-        let mut decompressed = data_attrs.compression.decoder(buffer);
+        let mut decompressed = data_attrs.get_compression().decoder(buffer);
         block.read_data(&mut decompressed)?;
 
         Ok(block)
@@ -580,10 +628,10 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
                 ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
-        let header = Self::read_block_header(&mut buffer, grid_position)?;
+        let header = Self::read_block_header(grid_position, data_attrs)?;
 
         block.reinitialize(header);
-        let mut decompressed = data_attrs.compression.decoder(buffer);
+        let mut decompressed = data_attrs.get_compression().decoder(buffer);
         block.read_data(&mut decompressed)?;
 
         Ok(())
@@ -606,17 +654,17 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
 
         let mode: u16 = if block.get_num_elements() == block.get_size().iter().product::<u32>()
             {BLOCK_FIXED_LEN} else {BLOCK_VAR_LEN};
-        buffer.write_u16::<N5Endian>(mode)?;
-        buffer.write_u16::<N5Endian>(data_attrs.get_ndim() as u16)?;
+        buffer.write_u16::<NgPreEndian>(mode)?;
+        buffer.write_u16::<NgPreEndian>(data_attrs.get_ndim() as u16)?;
         for i in block.get_size() {
-            buffer.write_u32::<N5Endian>(*i)?;
+            buffer.write_u32::<NgPreEndian>(*i)?;
         }
 
         if mode != BLOCK_FIXED_LEN {
-            buffer.write_u32::<N5Endian>(block.get_num_elements())?;
+            buffer.write_u32::<NgPreEndian>(block.get_num_elements())?;
         }
 
-        let mut compressor = data_attrs.compression.encoder(buffer);
+        let mut compressor = data_attrs.get_compression().encoder(buffer);
         block.write_data(&mut compressor)?;
 
         Ok(())

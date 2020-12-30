@@ -7,17 +7,17 @@ use smallvec::smallvec;
 use rand::Rng;
 use rand::distributions::Standard;
 
-use n5::prelude::*;
-use n5::ndarray::prelude::*;
+use ngpre::prelude::*;
+use ngpre::ndarray::prelude::*;
 
 
 #[test]
 fn test_read_ndarray() {
 
-    let dir = tempdir::TempDir::new("rust_n5_ndarray_tests").unwrap();
+    let dir = tempdir::TempDir::new("rust_ngpre_ndarray_tests").unwrap();
 
-    let n = N5Filesystem::open_or_create(dir.path())
-        .expect("Failed to create N5 filesystem");
+    let n = NgPreFilesystem::open_or_create(dir.path())
+        .expect("Failed to create NgPre filesystem");
 
     let block_size = smallvec![3, 4, 2, 1];
     let data_attrs = DatasetAttributes::new(
@@ -80,10 +80,10 @@ fn test_read_ndarray() {
 #[test]
 fn test_read_ndarray_oob() {
 
-    let dir = tempdir::TempDir::new("rust_n5_ndarray_tests").unwrap();
+    let dir = tempdir::TempDir::new("rust_ngpre_ndarray_tests").unwrap();
 
-    let n = N5Filesystem::open_or_create(dir.path())
-        .expect("Failed to create N5 filesystem");
+    let n = NgPreFilesystem::open_or_create(dir.path())
+        .expect("Failed to create NgPre filesystem");
 
     let block_size = smallvec![50, 100];
     let data_attrs = DatasetAttributes::new(
@@ -113,10 +113,10 @@ fn test_read_ndarray_oob() {
 #[test]
 fn test_write_read_ndarray() {
 
-    let dir = tempdir::TempDir::new("rust_n5_ndarray_tests").unwrap();
+    let dir = tempdir::TempDir::new("rust_ngpre_ndarray_tests").unwrap();
 
-    let n = N5Filesystem::open_or_create(dir.path())
-        .expect("Failed to create N5 filesystem");
+    let n = NgPreFilesystem::open_or_create(dir.path())
+        .expect("Failed to create NgPre filesystem");
 
     let block_size = smallvec![3, 4, 2, 1];
     let data_attrs = DatasetAttributes::new(

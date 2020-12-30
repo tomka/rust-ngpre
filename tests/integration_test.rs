@@ -4,16 +4,16 @@ use rand::{
     Rng,
 };
 
-use n5::prelude::*;
+use ngpre::prelude::*;
 
 
-fn test_read_write<T, N5: N5Reader + N5Writer>(
-        n: &N5,
+fn test_read_write<T, NgPre: NgPreReader + NgPreWriter>(
+        n: &NgPre,
         compression: &CompressionType,
         dim: usize,
 ) where T: 'static + std::fmt::Debug + ReflectedType + PartialEq + Default,
         rand::distributions::Standard: rand::distributions::Distribution<T>,
-        VecDataBlock<T>: n5::ReadableDataBlock + n5::WriteableDataBlock,
+        VecDataBlock<T>: ngpre::ReadableDataBlock + ngpre::WriteableDataBlock,
 {
     let block_size: BlockCoord = (1..=dim as u32).rev().map(|d| d*5).collect();
     let data_attrs = DatasetAttributes::new(
@@ -57,8 +57,8 @@ fn test_read_write<T, N5: N5Reader + N5Writer>(
     n.remove(path_name).unwrap();
 }
 
-fn test_all_types<N5: N5Reader + N5Writer>(
-        n: &N5,
+fn test_all_types<NgPre: NgPreReader + NgPreWriter>(
+        n: &NgPre,
         compression: &CompressionType,
         dim: usize,
 ) {
@@ -74,22 +74,22 @@ fn test_all_types<N5: N5Reader + N5Writer>(
     test_read_write::<f64, _>(n, compression, dim);
 }
 
-fn test_n5_filesystem_dim(dim: usize) {
-    let dir = tempdir::TempDir::new("rust_n5_integration_tests").unwrap();
+fn test_ngpre_filesystem_dim(dim: usize) {
+    let dir = tempdir::TempDir::new("rust_ngpre_integration_tests").unwrap();
 
-    let n = N5Filesystem::open_or_create(dir.path())
-        .expect("Failed to create N5 filesystem");
+    let n = NgPreFilesystem::open_or_create(dir.path())
+        .expect("Failed to create NgPre filesystem");
     test_all_types(&n, &CompressionType::Raw(compression::raw::RawCompression::default()), dim);
 }
 
 #[test]
-fn test_n5_filesystem_dims() {
+fn test_ngpre_filesystem_dims() {
     for dim in 1..=5 {
-        test_n5_filesystem_dim(dim);
+        test_ngpre_filesystem_dim(dim);
     }
 }
 
-fn test_all_compressions<N5: N5Reader + N5Writer>(n: &N5) {
+fn test_all_compressions<NgPre: NgPreReader + NgPreWriter>(n: &NgPre) {
     test_all_types(n, &CompressionType::Raw(compression::raw::RawCompression::default()), 3);
     #[cfg(feature = "bzip")]
     test_all_types(n, &CompressionType::Bzip2(compression::bzip::Bzip2Compression::default()), 3);
@@ -102,10 +102,10 @@ fn test_all_compressions<N5: N5Reader + N5Writer>(n: &N5) {
 }
 
 #[test]
-fn test_n5_filesystem_compressions() {
-    let dir = tempdir::TempDir::new("rust_n5_integration_tests").unwrap();
+fn test_ngpre_filesystem_compressions() {
+    let dir = tempdir::TempDir::new("rust_ngpre_integration_tests").unwrap();
 
-    let n = N5Filesystem::open_or_create(dir.path())
-        .expect("Failed to create N5 filesystem");
+    let n = NgPreFilesystem::open_or_create(dir.path())
+        .expect("Failed to create NgPre filesystem");
     test_all_compressions(&n)
 }

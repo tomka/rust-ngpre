@@ -22,8 +22,8 @@ use crate::{
     DataBlock,
     DatasetAttributes,
     GridCoord,
-    N5Reader,
-    N5Writer,
+    NgPreReader,
+    NgPreWriter,
     ReadableDataBlock,
     ReflectedType,
     ReinitDataBlock,
@@ -32,12 +32,13 @@ use crate::{
     WriteableDataBlock,
 };
 
+use smallvec::SmallVec;
 
 pub mod prelude {
     pub use super::{
         BoundingBox,
-        N5NdarrayReader,
-        N5NdarrayWriter,
+        NgPreNdarrayReader,
+        NgPreNdarrayWriter,
     };
 }
 
@@ -68,8 +69,8 @@ impl BoundingBox {
     }
 
     /// ```
-    /// # use n5::ndarray::BoundingBox;
-    /// # use n5::smallvec::smallvec;
+    /// # use ngpre::ndarray::BoundingBox;
+    /// # use ngpre::smallvec::smallvec;
     /// let mut a = BoundingBox::new(smallvec![0, 0], smallvec![5, 8]);
     /// let b = BoundingBox::new(smallvec![3, 3], smallvec![5, 3]);
     /// let c = BoundingBox::new(smallvec![3, 3], smallvec![2, 3]);
@@ -91,8 +92,8 @@ impl BoundingBox {
     }
 
     /// ```
-    /// # use n5::ndarray::BoundingBox;
-    /// # use n5::smallvec::smallvec;
+    /// # use ngpre::ndarray::BoundingBox;
+    /// # use ngpre::smallvec::smallvec;
     /// let mut a = BoundingBox::new(smallvec![0, 0], smallvec![5, 8]);
     /// let b = BoundingBox::new(smallvec![3, 3], smallvec![5, 3]);
     /// let c = BoundingBox::new(smallvec![0, 0], smallvec![8, 8]);
@@ -145,8 +146,8 @@ impl Sub<&GridCoord> for BoundingBox {
     }
 }
 
-pub trait N5NdarrayReader : N5Reader {
-    /// Read an arbitrary bounding box from an N5 volume into an ndarray,
+pub trait NgPreNdarrayReader : NgPreReader {
+    /// Read an arbitrary bounding box from a Neuroglancer Precomputed volume into an ndarray,
     /// reading blocks in serial as necessary.
     ///
     /// Assumes blocks are column-major and returns a column-major ndarray.
@@ -166,7 +167,7 @@ pub trait N5NdarrayReader : N5Reader {
         Ok(arr)
     }
 
-    /// Read an arbitrary bounding box from an N5 volume into an existing
+    /// Read an arbitrary bounding box from an NgPre volume into an existing
     /// ndarray view, reading blocks in serial as necessary.
     ///
     /// Assumes blocks are column-major. The array can be any order, but column-
@@ -184,7 +185,7 @@ pub trait N5NdarrayReader : N5Reader {
         self.read_ndarray_into_with_buffer(path_name, data_attrs, bbox, arr, &mut None)
     }
 
-    /// Read an arbitrary bounding box from an N5 volume into an existing
+    /// Read an arbitrary bounding box from an NgPre volume into an existing
     /// ndarray view, reading blocks in serial as necessary into a provided
     /// buffer.
     ///
@@ -246,7 +247,7 @@ pub trait N5NdarrayReader : N5Reader {
 
                 let block_slice = block_read_bb.to_ndarray_slice();
 
-                // N5 datasets are stored f-order/column-major.
+                // NgPre datasets are stored f-order/column-major.
                 let block_data = ArrayView::from_shape(block_bb.size_ndarray_shape().f(), block.get_data())
                     .expect("TODO: block ndarray failed");
                 let block_view = block_data.slice(SliceInfo::<_, IxDyn>::new(block_slice).unwrap().as_ref());
@@ -259,11 +260,11 @@ pub trait N5NdarrayReader : N5Reader {
     }
 }
 
-impl<T: N5Reader> N5NdarrayReader for T {}
+impl<T: NgPreReader> NgPreNdarrayReader for T {}
 
 
-pub trait N5NdarrayWriter : N5Writer {
-    /// Write an arbitrary bounding box from an ndarray into an N5 volume,
+pub trait NgPreNdarrayWriter : NgPreWriter {
+    /// Write an arbitrary bounding box from an ndarray into an NgPre volume,
     /// writing blocks in serial as necessary.
     fn write_ndarray<'a, T, A>(
         &self,
@@ -356,7 +357,7 @@ pub trait N5NdarrayWriter : N5Writer {
     }
 }
 
-impl<T: N5Writer> N5NdarrayWriter for T {}
+impl<T: NgPreWriter> NgPreNdarrayWriter for T {}
 
 
 impl DatasetAttributes {
@@ -371,12 +372,12 @@ impl DatasetAttributes {
 
     pub fn bounded_coord_iter(&self, bbox: &BoundingBox) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
         let floor_coord: GridCoord = bbox.offset.iter()
-            .zip(&self.block_size)
+            .zip(self.get_block_size().iter())
             .map(|(&o, &bs)| o / u64::from(bs))
             .collect();
         let ceil_coord: GridCoord = bbox.offset.iter()
             .zip(&bbox.size)
-            .zip(self.block_size.iter().cloned().map(u64::from))
+            .zip(self.get_block_size().iter().cloned().map(u64::from))
             .map(|((&o, &s), bs)| (o + s + bs - 1) / bs)
             .collect();
 
@@ -385,8 +386,8 @@ impl DatasetAttributes {
 
     pub fn get_bounds(&self) -> BoundingBox {
         BoundingBox {
-            offset: smallvec![0; self.dimensions.len()],
-            size: self.dimensions.clone(),
+            offset: smallvec![0; self.get_dimensions().len()],
+            size: SmallVec::from_vec(self.get_dimensions().iter().cloned().map(u64::from).collect()),
         }
     }
 

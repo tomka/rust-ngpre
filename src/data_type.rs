@@ -7,7 +7,7 @@ use crate::BlockHeader;
 use crate::VecDataBlock;
 
 
-/// Data types representable in N5.
+/// Data types representable in NgPre.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
@@ -117,7 +117,7 @@ impl std::fmt::Display for DataType {
     }
 }
 
-/// Trait implemented by primitive types that are reflected in N5.
+/// Trait implemented by primitive types that are reflected in NgPre.
 ///
 /// The supertraits are not necessary for this trait, but are used to
 /// remove redundant bounds elsewhere when operating generically over

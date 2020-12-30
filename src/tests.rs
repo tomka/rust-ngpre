@@ -5,7 +5,7 @@ use serde_json::json;
 
 const DOC_SPEC_BLOCK_DATA: [i16; 6] = [1, 2, 3, 4, 5, 6];
 
-pub(crate) trait N5Testable: N5Reader + N5Writer {
+pub(crate) trait NgPreTestable: NgPreReader + NgPreWriter {
     type Wrapper: AsRef<Self>;
 
     fn temp_new_rw() -> Self::Wrapper;
@@ -14,15 +14,15 @@ pub(crate) trait N5Testable: N5Reader + N5Writer {
 }
 
 /// Wrapper type for holding a context from dropping during the lifetime of an
-/// N5 backend. This is useful for things like tempdirs.
-pub struct ContextWrapper<C, N: N5Reader + N5Writer> {
+/// NgPre backend. This is useful for things like tempdirs.
+pub struct ContextWrapper<C, N: NgPreReader + NgPreWriter> {
     pub context: C,
-    pub n5: N,
+    pub ngpre: N,
 }
 
-impl<C, N: N5Reader + N5Writer> AsRef<N> for ContextWrapper<C, N> {
+impl<C, N: NgPreReader + NgPreWriter> AsRef<N> for ContextWrapper<C, N> {
     fn as_ref(&self) -> &N {
-        &self.n5
+        &self.ngpre
     }
 }
 
@@ -131,7 +131,7 @@ pub(crate) fn test_varlength_block_rw(compression: compression::CompressionType)
     assert_eq!(block_out.get_data(), &block_data[..]);
 }
 
-pub(crate) fn create_backend<N: N5Testable>() {
+pub(crate) fn create_backend<N: NgPreTestable>() {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     create.set_attribute("", "foo".to_owned(), "bar")
@@ -143,7 +143,7 @@ pub(crate) fn create_backend<N: N5Testable>() {
     assert_eq!(read.list_attributes("").unwrap()["foo"], "bar");
 }
 
-pub(crate) fn create_dataset<N: N5Testable>() {
+pub(crate) fn create_dataset<N: NgPreTestable>() {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     let data_attrs = DatasetAttributes::new(
@@ -160,7 +160,7 @@ pub(crate) fn create_dataset<N: N5Testable>() {
     assert_eq!(read.get_dataset_attributes("foo/bar").unwrap(), data_attrs);
 }
 
-pub(crate) fn absolute_relative_paths<N: N5Testable>() -> Result<()> {
+pub(crate) fn absolute_relative_paths<N: NgPreTestable>() -> Result<()> {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     let data_attrs = DatasetAttributes::new(
@@ -187,7 +187,7 @@ pub(crate) fn absolute_relative_paths<N: N5Testable>() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn attributes_rw<N: N5Testable>() {
+pub(crate) fn attributes_rw<N: NgPreTestable>() {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     let group = "foo";
@@ -240,7 +240,7 @@ pub(crate) fn attributes_rw<N: N5Testable>() {
         serde_json::Value::Object(attrs_3));
 }
 
-pub(crate) fn create_block_rw<N: N5Testable>() {
+pub(crate) fn create_block_rw<N: NgPreTestable>() {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     let data_attrs = DatasetAttributes::new(
@@ -285,7 +285,7 @@ pub(crate) fn create_block_rw<N: N5Testable>() {
     assert_eq!(block_out.get_data(), &block_data[..]);
 }
 
-pub(crate) fn delete_block<N: N5Testable>() {
+pub(crate) fn delete_block<N: NgPreTestable>() {
     let wrapper = N::temp_new_rw();
     let create = wrapper.as_ref();
     let data_attrs = DatasetAttributes::new(

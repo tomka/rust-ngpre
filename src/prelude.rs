@@ -1,12 +1,12 @@
-//! N5 prelude.
+//! NgPre prelude.
 //!
 //! This module contains the most used import targets for easy import into
 //! client libraries.
 //!
 //! ```
-//! extern crate n5;
+//! extern crate ngpre;
 //!
-//! use n5::prelude::*;
+//! use ngpre::prelude::*;
 //! ```
 
 #[doc(no_inline)]
@@ -17,9 +17,9 @@ pub use crate::{
     DataBlockMetadata,
     DataType,
     GridCoord,
-    N5Lister,
-    N5Reader,
-    N5Writer,
+    NgPreLister,
+    NgPreReader,
+    NgPreWriter,
     ReflectedType,
     SliceDataBlock,
     VecDataBlock,
@@ -31,4 +31,4 @@ pub use crate::compression::{
 };
 #[cfg(feature = "filesystem")]
 #[doc(no_inline)]
-pub use crate::filesystem::N5Filesystem;
+pub use crate::filesystem::NgPreFilesystem;
