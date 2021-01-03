@@ -202,7 +202,10 @@ pub trait NgPreNdarrayReader : NgPreReader {
         where VecDataBlock<T>: DataBlock<T> + ReinitDataBlock<T> + ReadableDataBlock,
             T: ReflectedType + num_traits::identities::Zero {
 
-        if bbox.offset.len() != data_attrs.get_ndim() || data_attrs.get_ndim() != arr.ndim() {
+        // TODO: Could be nicer
+        let zoom_level = data_attrs.scales.iter().position(|s| s.key == path_name).unwrap();
+
+        if bbox.offset.len() != data_attrs.get_ndim(zoom_level) || data_attrs.get_ndim(zoom_level) != arr.ndim() {
             return Err(Error::new(ErrorKind::InvalidData, "Wrong number of dimensions"));
         }
 
@@ -210,7 +213,7 @@ pub trait NgPreNdarrayReader : NgPreReader {
             return Err(Error::new(ErrorKind::InvalidData, "Bounding box and array have different shape"));
         }
 
-        for coord in data_attrs.bounded_coord_iter(bbox) {
+        for coord in data_attrs.bounded_coord_iter(bbox, zoom_level) {
 
             let grid_pos = GridCoord::from(&coord[..]);
             let is_block = match block_buff_opt {
@@ -228,7 +231,7 @@ pub trait NgPreNdarrayReader : NgPreReader {
 
             if let Some(ref block) = block_buff_opt {
 
-                let block_bb = block.get_bounds(data_attrs);
+                let block_bb = block.get_bounds(data_attrs, zoom_level);
                 let mut read_bb = bbox.clone();
                 read_bb.intersect(&block_bb);
 
@@ -279,8 +282,11 @@ pub trait NgPreNdarrayWriter : NgPreWriter {
               T: ReflectedType + num_traits::identities::Zero,
               A: ndarray::AsArray<'a, T, ndarray::Dim<ndarray::IxDynImpl>> {
 
+        // TODO: Could be nicer
+        let zoom_level = data_attrs.scales.iter().position(|s| s.key == path_name).unwrap();
+
         let array = array.into();
-        if array.ndim() != data_attrs.get_ndim() {
+        if array.ndim() != data_attrs.get_ndim(zoom_level) {
             return Err(Error::new(ErrorKind::InvalidData, "Wrong number of dimensions"));
         }
         let bbox = BoundingBox {
@@ -290,10 +296,11 @@ pub trait NgPreNdarrayWriter : NgPreWriter {
 
         let mut block_vec: Vec<T> = Vec::new();
 
-        for coord in data_attrs.bounded_coord_iter(&bbox) {
+        for coord in data_attrs.bounded_coord_iter(&bbox, zoom_level) {
 
             let grid_coord = GridCoord::from(&coord[..]);
-            let nom_block_bb = data_attrs.get_block_bounds(&grid_coord);
+            // FIXME: use zoom_level not 0
+            let nom_block_bb = data_attrs.get_block_bounds(&grid_coord, zoom_level);
             let mut write_bb = nom_block_bb.clone();
             write_bb.intersect(&bbox);
             let arr_bb = write_bb.clone() - &bbox.offset;
@@ -318,7 +325,8 @@ pub trait NgPreNdarrayWriter : NgPreWriter {
 
                 let (block_bb, mut block_array) = match block_opt {
                     Some(block) => {
-                        let block_bb = block.get_bounds(data_attrs);
+                        // FIXME: use zoom_level not 0
+                        let block_bb = block.get_bounds(data_attrs, 0);
                         let block_array = Array::from_shape_vec(block_bb.size_ndarray_shape().f(), block.into_data())
                             .expect("TODO: block ndarray failed");
                         (block_bb, block_array)
@@ -361,52 +369,52 @@ impl<T: NgPreWriter> NgPreNdarrayWriter for T {}
 
 
 impl DatasetAttributes {
-    pub fn coord_iter(&self) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
-        let coord_ceil = self.get_dimensions().iter()
-            .zip(self.get_block_size().iter())
+    pub fn coord_iter(&self, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
+        let coord_ceil = self.get_dimensions(zoom_level).iter()
+            .zip(self.get_block_size(zoom_level).iter())
             .map(|(&d, &s)| (d + u64::from(s) - 1) / u64::from(s))
             .collect::<GridCoord>();
 
         CoordIterator::new(&coord_ceil)
     }
 
-    pub fn bounded_coord_iter(&self, bbox: &BoundingBox) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
+    pub fn bounded_coord_iter(&self, bbox: &BoundingBox, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
         let floor_coord: GridCoord = bbox.offset.iter()
-            .zip(self.get_block_size().iter())
+            .zip(self.get_block_size(zoom_level).iter())
             .map(|(&o, &bs)| o / u64::from(bs))
             .collect();
         let ceil_coord: GridCoord = bbox.offset.iter()
             .zip(&bbox.size)
-            .zip(self.get_block_size().iter().cloned().map(u64::from))
+            .zip(self.get_block_size(zoom_level).iter().cloned().map(u64::from))
             .map(|((&o, &s), bs)| (o + s + bs - 1) / bs)
             .collect();
 
         CoordIterator::floor_ceil(&floor_coord, &ceil_coord)
     }
 
-    pub fn get_bounds(&self) -> BoundingBox {
+    pub fn get_bounds(&self, zoom_level: usize) -> BoundingBox {
         BoundingBox {
-            offset: smallvec![0; self.get_dimensions().len()],
-            size: SmallVec::from_vec(self.get_dimensions().iter().cloned().map(u64::from).collect()),
+            offset: smallvec![0; self.get_dimensions(zoom_level).len()],
+            size: SmallVec::from_vec(self.get_dimensions(zoom_level).iter().cloned().map(u64::from).collect()),
         }
     }
 
-    pub fn get_block_bounds(&self, coord: &GridCoord) -> BoundingBox {
-        let mut size: GridCoord = self.get_block_size().iter().cloned().map(u64::from).collect();
+    pub fn get_block_bounds(&self, coord: &GridCoord, zoom_level: usize) -> BoundingBox {
+        let mut size: GridCoord = self.get_block_size(zoom_level).iter().cloned().map(u64::from).collect();
         let offset: GridCoord = coord.iter()
             .zip(size.iter())
             .map(|(c, s)| c * s).collect();
         size.iter_mut()
             .zip(offset.iter())
-            .zip(self.get_dimensions().iter())
+            .zip(self.get_dimensions(zoom_level).iter())
             .for_each(|((s, o), d)| *s = cmp::min(*s + *o, *d) - *o);
         BoundingBox { offset, size }
     }
 }
 
 impl<T: ReflectedType, C> SliceDataBlock<T, C> {
-    pub fn get_bounds(&self, data_attrs: &DatasetAttributes) -> BoundingBox {
-        let mut bbox = data_attrs.get_block_bounds(&self.grid_position);
+    pub fn get_bounds(&self, data_attrs: &DatasetAttributes, zoom_level: usize) -> BoundingBox {
+        let mut bbox = data_attrs.get_block_bounds(&self.grid_position, zoom_level);
         bbox.size = self.size.iter().cloned().map(u64::from).collect();
         bbox
     }

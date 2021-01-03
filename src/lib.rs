@@ -23,7 +23,6 @@ use std::io::{
 };
 use std::marker::PhantomData;
 use std::time::SystemTime;
-use std::mem::size_of;
 
 use byteorder::{
     LittleEndian,
@@ -308,20 +307,20 @@ impl DatasetAttributes {
         &self.compression
     }
 
-    pub fn get_dimensions(&self) -> &[u64] {
-        &self.scales[0].size
+    pub fn get_dimensions(&self, zoom_level: usize) -> &[u64] {
+        &self.scales[zoom_level].size
     }
 
-    pub fn get_block_size(&self) -> &[u32] {
-        &self.scales[0].chunk_sizes[0]
+    pub fn get_block_size(&self, zoom_level: usize) -> &[u32] {
+        &self.scales[zoom_level].chunk_sizes[0]
     }
 
-    pub fn get_voxel_offset(&self) -> &[i32] {
-        &self.scales[0].voxel_offset
+    pub fn get_voxel_offset(&self, zoom_level: usize) -> &[i32] {
+        &self.scales[zoom_level].voxel_offset
     }
 
-    pub fn get_ndim(&self) -> usize {
-        self.scales[0].size.len()
+    pub fn get_ndim(&self, zoom_level: usize) -> usize {
+        self.scales[zoom_level].size.len()
     }
 
     pub fn get_data_type(&self) -> &DataType {
@@ -332,28 +331,28 @@ impl DatasetAttributes {
         &self.r#type
     }
 
-    pub fn get_scales(&self) -> &Vec<ScaleEntry> {
-        &self.scales
-    }
-
     pub fn get_num_channels(&self) -> u32 {
         self.num_channels
     }
 
+    pub fn get_scales(&self) -> &Vec<ScaleEntry> {
+        &self.scales
+    }
+
     /// Get the total number of elements possible given the dimensions.
-    pub fn get_num_elements(&self) -> usize {
-        self.get_dimensions().iter().map(|&d| d as usize).product()
+    pub fn get_num_elements(&self, zoom_level: usize) -> usize {
+        self.get_dimensions(zoom_level).iter().map(|&d| d as usize).product()
     }
 
     /// Get the total number of elements possible in a block.
-    pub fn get_block_num_elements(&self) -> usize {
-        self.get_block_size().iter().map(|&d| d as usize).product()
+    pub fn get_block_num_elements(&self, zoom_level: usize) -> usize {
+        self.get_block_size(zoom_level).iter().map(|&d| d as usize).product()
     }
 
     /// Get the upper bound extent of grid coordinates.
-    pub fn get_grid_extent(&self) -> GridCoord {
-        self.get_dimensions().iter()
-            .zip(self.get_block_size().iter().cloned().map(u64::from))
+    pub fn get_grid_extent(&self, zoom_level: usize) -> GridCoord {
+        self.get_dimensions(zoom_level).iter()
+            .zip(self.get_block_size(zoom_level).iter().cloned().map(u64::from))
             .map(|(d, b)| u64_ceil_div(*d, b))
             .collect()
     }
@@ -370,8 +369,8 @@ impl DatasetAttributes {
     /// );
     /// assert_eq!(attrs.get_num_blocks(), 60);
     /// ```
-    pub fn get_num_blocks(&self) -> u64 {
-        self.get_grid_extent().iter().product()
+    pub fn get_num_blocks(&self, zoom_level: usize) -> u64 {
+        self.get_grid_extent(zoom_level).iter().product()
     }
 
     /// Check whether a block grid position is in the bounds of this dataset.
@@ -387,9 +386,9 @@ impl DatasetAttributes {
     /// assert!(attrs.in_bounds(&smallvec![4, 3, 2]));
     /// assert!(!attrs.in_bounds(&smallvec![5, 3, 2]));
     /// ```
-    pub fn in_bounds(&self, grid_position: &GridCoord) -> bool {
-        self.get_dimensions().len() == grid_position.len() &&
-        self.get_grid_extent().iter()
+    pub fn in_bounds(&self, grid_position: &GridCoord, zoom_level: usize) -> bool {
+        self.get_dimensions(zoom_level).len() == grid_position.len() &&
+        self.get_grid_extent(zoom_level).iter()
             .zip(grid_position.iter())
             .all(|(&bound, &coord)| coord < bound)
     }
@@ -578,9 +577,10 @@ pub trait DefaultBlockHeaderReader<R: std::io::Read> {
     fn read_block_header(
         grid_position: GridCoord,
         data_attrs: &DatasetAttributes,
+        zoom_level: usize,
     ) -> std::io::Result<BlockHeader> {
 
-        let bs = data_attrs.get_block_size();
+        let bs = data_attrs.get_block_size(zoom_level);
         let nc = data_attrs.get_num_channels();
         let size = smallvec![bs[0], bs[1], bs[2], nc];
         let num_el = bs.iter().fold(1,|a, &b| a * b);
@@ -596,7 +596,7 @@ pub trait DefaultBlockHeaderReader<R: std::io::Read> {
 /// Reads blocks from rust readers.
 pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHeaderReader<R> {
     fn read_block(
-        mut buffer: R,
+        buffer: R,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
     ) -> std::io::Result<VecDataBlock<T>>
@@ -607,7 +607,10 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
                 ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
-        let header = Self::read_block_header(grid_position, data_attrs)?;
+
+        // FIXME
+        let zoom_level = 0;
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
 
         let mut block = T::create_data_block(header);
         let mut decompressed = data_attrs.get_compression().decoder(buffer);
@@ -617,7 +620,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
     }
 
     fn read_block_into<B: DataBlock<T> + ReinitDataBlock<T> + ReadableDataBlock>(
-        mut buffer: R,
+        buffer: R,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
         block: &mut B,
@@ -628,7 +631,9 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
                 ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
-        let header = Self::read_block_header(grid_position, data_attrs)?;
+        // FIXME
+        let zoom_level = 0;
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
 
         block.reinitialize(header);
         let mut decompressed = data_attrs.get_compression().decoder(buffer);
@@ -652,10 +657,13 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
                 "Attempt to write data block for wrong type."))
         }
 
+        // FIXME: find actual zoom level
+        let zoom_level = 0;
+
         let mode: u16 = if block.get_num_elements() == block.get_size().iter().product::<u32>()
             {BLOCK_FIXED_LEN} else {BLOCK_VAR_LEN};
         buffer.write_u16::<NgPreEndian>(mode)?;
-        buffer.write_u16::<NgPreEndian>(data_attrs.get_ndim() as u16)?;
+        buffer.write_u16::<NgPreEndian>(data_attrs.get_ndim(zoom_level) as u16)?;
         for i in block.get_size() {
             buffer.write_u32::<NgPreEndian>(*i)?;
         }
