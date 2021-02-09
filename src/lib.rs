@@ -615,7 +615,10 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
 
         let mut block = T::create_data_block(header);
         let mut decompressed = data_attrs.get_compression().decoder(buffer);
-        block.read_data(&mut decompressed)?;
+
+        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
+        // smaller blocks on the edges.
+        let _ = block.read_data(&mut decompressed);
 
         Ok(block)
     }
@@ -638,7 +641,10 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
 
         block.reinitialize(header);
         let mut decompressed = data_attrs.get_compression().decoder(buffer);
-        block.read_data(&mut decompressed)?;
+
+        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
+        // smaller blocks on the edges.
+        let _ = block.read_data(&mut decompressed);
 
         Ok(())
     }
