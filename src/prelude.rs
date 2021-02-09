@@ -17,6 +17,7 @@ pub use crate::{
     DataBlockMetadata,
     DataType,
     GridCoord,
+    UnboundedGridCoord,
     NgPreLister,
     NgPreReader,
     NgPreWriter,

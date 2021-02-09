@@ -59,6 +59,7 @@ const COORD_SMALLVEC_SIZE: usize = 6;
 pub type CoordVec<T> = SmallVec<[T; COORD_SMALLVEC_SIZE]>;
 pub type BlockCoord = CoordVec<u32>;
 pub type GridCoord = CoordVec<u64>;
+pub type UnboundedGridCoord = CoordVec<i64>;
 pub type OffsetCoord = CoordVec<i32>;
 pub type ChunkSize = CoordVec<u32>;
 pub type ResolutionType = CoordVec<f32>;
