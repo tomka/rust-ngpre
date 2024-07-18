@@ -33,7 +33,6 @@ pub trait Compression : Default {
 /// Enumeration of known compression schemes.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
-#[serde(tag = "type")]
 pub enum CompressionType {
     Raw(raw::RawCompression),
     #[cfg(feature = "bzip")]

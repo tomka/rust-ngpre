@@ -71,16 +71,14 @@ pub enum DatasetType {
     IMAGE,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub enum Encoding {
-    RAW,
-}
-
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct ScaleEntry {
     pub chunk_sizes: Vec<ChunkSize>,
-    pub encoding: Encoding,
+
+    /// Compression scheme for voxel data in each block.
+    #[serde(default = "compression::CompressionType::default")]
+    pub encoding: compression::CompressionType,
+
     pub key: String,
     pub resolution: ResolutionType,
     pub size: GridCoord,
@@ -275,16 +273,6 @@ pub struct DatasetAttributes {
     scales: Vec<ScaleEntry>,
     /// Number of channels
     num_channels: u32,
-
-    /// Compression scheme for voxel data in each block.
-    #[serde(skip_serializing)]
-    #[serde(default = "compression::CompressionType::default")]
-    compression: compression::CompressionType,
-
-    ///// Dimensions of the entire dataset, in voxels.
-    //dimensions: GridCoord,
-    ///// Size of each block, in voxels.
-    //block_size: BlockCoord,
 }
 
 impl DatasetAttributes {
@@ -293,19 +281,17 @@ impl DatasetAttributes {
         r#type: DatasetType,
         scales: Vec<ScaleEntry>,
         num_channels: u32,
-        compression: compression::CompressionType,
     ) -> DatasetAttributes {
         DatasetAttributes {
             data_type,
             r#type,
             scales,
             num_channels,
-            compression,
         }
     }
 
-    pub fn get_compression(&self) -> &compression::CompressionType {
-        &self.compression
+    pub fn get_compression(&self, zoom_level: usize) -> &compression::CompressionType {
+        &self.scales[zoom_level].encoding
     }
 
     pub fn get_dimensions(&self, zoom_level: usize) -> &[u64] {
@@ -614,7 +600,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
 
         let mut block = T::create_data_block(header);
-        let mut decompressed = data_attrs.get_compression().decoder(buffer);
+        let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
 
         // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
         // smaller blocks on the edges.
@@ -640,7 +626,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
 
         block.reinitialize(header);
-        let mut decompressed = data_attrs.get_compression().decoder(buffer);
+        let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
 
         // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
         // smaller blocks on the edges.
@@ -679,7 +665,7 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
             buffer.write_u32::<NgPreEndian>(block.get_num_elements())?;
         }
 
-        let mut compressor = data_attrs.get_compression().encoder(buffer);
+        let mut compressor = data_attrs.get_compression(zoom_level).encoder(buffer);
         block.write_data(&mut compressor)?;
 
         Ok(())
