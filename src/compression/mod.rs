@@ -21,6 +21,8 @@ pub(self) mod lz_pure;
 pub mod lz { pub use super::lz_pure::*; }
 #[cfg(feature = "xz")]
 pub mod xz;
+#[cfg(feature = "jpeg")]
+pub mod jpeg;
 
 
 /// Common interface for compressing writers and decompressing readers.
@@ -43,6 +45,8 @@ pub enum CompressionType {
     Lz4(lz::Lz4Compression),
     #[cfg(feature = "xz")]
     Xz(xz::XzCompression),
+    #[cfg(feature = "jpeg")]
+    Jpeg(jpeg::JpegCompression),
 }
 
 impl CompressionType {
@@ -74,6 +78,9 @@ impl Compression for CompressionType {
 
             #[cfg(any(feature = "lz", feature = "lz_pure"))]
             CompressionType::Lz4(ref c) => c.decoder(r),
+
+            #[cfg(feature = "jpeg")]
+            CompressionType::Jpeg(ref c) => c.decoder(r),
         }
     }
 
@@ -92,6 +99,9 @@ impl Compression for CompressionType {
 
             #[cfg(any(feature = "lz", feature = "lz_pure"))]
             CompressionType::Lz4(ref c) => c.encoder(w),
+
+            #[cfg(feature = "jpeg")]
+            CompressionType::Jpeg(ref c) => c.encoder(w),
         }
     }
 }
@@ -112,6 +122,9 @@ impl std::fmt::Display for CompressionType {
 
             #[cfg(any(feature = "lz", feature = "lz_pure"))]
             CompressionType::Lz4(_) => "Lz4",
+
+            #[cfg(feature = "jpeg")]
+            CompressionType::Jpeg(_) => "Jpeg",
         })
     }
 }
@@ -134,6 +147,9 @@ impl std::str::FromStr for CompressionType {
 
             #[cfg(feature = "lz")]
             "lz4" => Ok(Self::new::<lz::Lz4Compression>()),
+
+            #[cfg(feature = "jpeg")]
+            "jpeg" => Ok(Self::new::<jpeg::JpegCompression>()),
 
             _ => Err(std::io::ErrorKind::InvalidInput.into()),
         }
@@ -159,3 +175,5 @@ compression_from_impl!(Gzip, gzip::GzipCompression);
 compression_from_impl!(Xz, xz::XzCompression);
 #[cfg(any(feature = "lz", feature = "lz_pure"))]
 compression_from_impl!(Lz4, lz::Lz4Compression);
+#[cfg(feature = "jpeg")]
+compression_from_impl!(Jpeg, jpeg::JpegCompression);
