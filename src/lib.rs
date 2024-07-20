@@ -76,6 +76,7 @@ pub struct ScaleEntry {
     pub chunk_sizes: Vec<ChunkSize>,
 
     /// Compression scheme for voxel data in each block.
+    #[serde(skip_serializing)]
     #[serde(default = "compression::CompressionType::default")]
     pub encoding: compression::CompressionType,
 
