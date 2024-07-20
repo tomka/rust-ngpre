@@ -83,6 +83,8 @@ pub struct ScaleEntry {
     pub key: String,
     pub resolution: ResolutionType,
     pub size: GridCoord,
+
+    #[serde(default = "OffsetCoord::default")]
     pub voxel_offset: OffsetCoord,
 }
 
