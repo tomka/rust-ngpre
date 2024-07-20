@@ -26,12 +26,11 @@ impl<C, N: NgPreReader + NgPreWriter> AsRef<N> for ContextWrapper<C, N> {
     }
 }
 
-fn doc_spec_dataset_attributes(compression: compression::CompressionType) -> DatasetAttributes {
+fn doc_spec_dataset_attributes() -> DatasetAttributes {
     DatasetAttributes {
         dimensions: smallvec![5, 6, 7],
         block_size: smallvec![1, 2, 3],
         data_type: DataType::INT16,
-        compression,
     }
 }
 
@@ -40,7 +39,7 @@ pub(crate) fn test_read_doc_spec_block(
         compression: compression::CompressionType,
 ) {
     let buff = Cursor::new(block);
-    let data_attrs = doc_spec_dataset_attributes(compression);
+    let data_attrs = doc_spec_dataset_attributes();
 
     let block = <DefaultBlock as DefaultBlockReader<i16, std::io::Cursor<&[u8]>>>::read_block(
         buff,
@@ -56,7 +55,7 @@ pub(crate) fn test_write_doc_spec_block(
         expected_block: &[u8],
         compression: compression::CompressionType,
 ) {
-    let data_attrs = doc_spec_dataset_attributes(compression);
+    let data_attrs = doc_spec_dataset_attributes();
     let block_in = SliceDataBlock::new(
         data_attrs.block_size.clone(),
         smallvec![0, 0, 0],
@@ -76,7 +75,6 @@ pub(crate) fn test_block_compression_rw(compression: compression::CompressionTyp
         dimensions: smallvec![10, 10, 10],
         block_size: smallvec![5, 5, 5],
         data_type: DataType::INT32,
-        compression,
     };
     let block_data: Vec<i32> = (0..125_i32).collect();
     let block_in = SliceDataBlock::new(
@@ -106,7 +104,6 @@ pub(crate) fn test_varlength_block_rw(compression: compression::CompressionType)
         dimensions: smallvec![10, 10, 10],
         block_size: smallvec![5, 5, 5],
         data_type: DataType::INT32,
-        compression,
     };
     let block_data: Vec<i32> = (0..100_i32).collect();
     let block_in = SliceDataBlock::new(
