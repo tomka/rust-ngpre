@@ -1,11 +1,4 @@
 use std::io::{Read, Write};
-use std::io::BufReader;
-
-use jpeg_decoder::Decoder;
-use jpeg_encoder::Encoder;
-use zune_core::bytestream::ZByteReader;
-use std::io::Cursor;
-use zune_jpeg::JpegDecoder;
 
 use serde::{
     Deserialize,
@@ -46,16 +39,16 @@ impl Default for JpegCompression {
 
 impl Compression for JpegCompression {
     fn decoder<'a, R: Read + 'a>(&self, r: R) -> Box<dyn Read + 'a> {
-        //Box::new(r)
-        Box::new(Decoder::new(r))
+        // FIXME: Return compressed data for now
+        Box::new(r)
+        //Box::new(BufReader::new(Decoder::new(r)))
         //Box::new(Decoder::new(Cursor::new(r)))
         //Box::new(JpegDecoder::new(&ZByteReader::new(&r)))
         //Box::new(JpegDecoder::new((r)))
     }
 
     fn encoder<'a, W: Write + 'a>(&self, w: W) -> Box<dyn Write + 'a> {
-        unimplemented!();
-        Box::new(Encoder::new(w, self.get_effective_quality()))
+        Box::new(w)
     }
 }
 

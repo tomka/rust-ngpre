@@ -37,14 +37,8 @@ pub trait Compression : Default {
 #[serde(rename_all = "lowercase")]
 pub enum CompressionType {
     Raw(raw::RawCompression),
-    #[cfg(feature = "bzip")]
-    Bzip2(bzip::Bzip2Compression),
     #[cfg(feature = "gzip")]
-    Gzip(gzip::GzipCompression),
-    #[cfg(any(feature = "lz", feature = "lz_pure"))]
-    Lz4(lz::Lz4Compression),
-    #[cfg(feature = "xz")]
-    Xz(xz::XzCompression),
+    Gzip(#[serde(skip)] gzip::GzipCompression),
     #[cfg(feature = "jpeg")]
     Jpeg(jpeg::JpegCompression),
 }
@@ -67,17 +61,8 @@ impl Compression for CompressionType {
         match *self {
             CompressionType::Raw(ref c) => c.decoder(r),
 
-            #[cfg(feature = "bzip")]
-            CompressionType::Bzip2(ref c) => c.decoder(r),
-
             #[cfg(feature = "gzip")]
             CompressionType::Gzip(ref c) => c.decoder(r),
-
-            #[cfg(feature = "xz")]
-            CompressionType::Xz(ref c) => c.decoder(r),
-
-            #[cfg(any(feature = "lz", feature = "lz_pure"))]
-            CompressionType::Lz4(ref c) => c.decoder(r),
 
             #[cfg(feature = "jpeg")]
             CompressionType::Jpeg(ref c) => c.decoder(r),
@@ -88,17 +73,8 @@ impl Compression for CompressionType {
         match *self {
             CompressionType::Raw(ref c) => c.encoder(w),
 
-            #[cfg(feature = "bzip")]
-            CompressionType::Bzip2(ref c) => c.encoder(w),
-
             #[cfg(feature = "gzip")]
             CompressionType::Gzip(ref c) => c.encoder(w),
-
-            #[cfg(feature = "xz")]
-            CompressionType::Xz(ref c) => c.encoder(w),
-
-            #[cfg(any(feature = "lz", feature = "lz_pure"))]
-            CompressionType::Lz4(ref c) => c.encoder(w),
 
             #[cfg(feature = "jpeg")]
             CompressionType::Jpeg(ref c) => c.encoder(w),
@@ -111,17 +87,8 @@ impl std::fmt::Display for CompressionType {
         write!(f, "{}", match *self {
             CompressionType::Raw(_) => "Raw",
 
-            #[cfg(feature = "bzip")]
-            CompressionType::Bzip2(_) => "Bzip2",
-
             #[cfg(feature = "gzip")]
             CompressionType::Gzip(_) => "Gzip",
-
-            #[cfg(feature = "xz")]
-            CompressionType::Xz(_) => "Xz",
-
-            #[cfg(any(feature = "lz", feature = "lz_pure"))]
-            CompressionType::Lz4(_) => "Lz4",
 
             #[cfg(feature = "jpeg")]
             CompressionType::Jpeg(_) => "Jpeg",
@@ -136,17 +103,8 @@ impl std::str::FromStr for CompressionType {
         match s.to_ascii_lowercase().as_str() {
             "raw" => Ok(Self::new::<raw::RawCompression>()),
 
-            #[cfg(feature = "bzip")]
-            "bzip2" => Ok(Self::new::<bzip::Bzip2Compression>()),
-
             #[cfg(feature = "gzip")]
             "gzip" => Ok(Self::new::<gzip::GzipCompression>()),
-
-            #[cfg(feature = "xz")]
-            "xz" => Ok(Self::new::<xz::XzCompression>()),
-
-            #[cfg(feature = "lz")]
-            "lz4" => Ok(Self::new::<lz::Lz4Compression>()),
 
             #[cfg(feature = "jpeg")]
             "jpeg" => Ok(Self::new::<jpeg::JpegCompression>()),
@@ -167,13 +125,7 @@ macro_rules! compression_from_impl {
 }
 
 compression_from_impl!(Raw, raw::RawCompression);
-#[cfg(feature = "bzip")]
-compression_from_impl!(Bzip2, bzip::Bzip2Compression);
 #[cfg(feature = "gzip")]
 compression_from_impl!(Gzip, gzip::GzipCompression);
-#[cfg(feature = "xz")]
-compression_from_impl!(Xz, xz::XzCompression);
-#[cfg(any(feature = "lz", feature = "lz_pure"))]
-compression_from_impl!(Lz4, lz::Lz4Compression);
 #[cfg(feature = "jpeg")]
 compression_from_impl!(Jpeg, jpeg::JpegCompression);
