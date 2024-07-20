@@ -36,11 +36,11 @@ pub trait Compression : Default {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionType {
-    Raw(raw::RawCompression),
+    Raw(#[serde(skip)] raw::RawCompression),
     #[cfg(feature = "gzip")]
     Gzip(#[serde(skip)] gzip::GzipCompression),
     #[cfg(feature = "jpeg")]
-    Jpeg(jpeg::JpegCompression),
+    Jpeg(#[serde(skip)] jpeg::JpegCompression),
 }
 
 impl CompressionType {
