@@ -72,20 +72,129 @@ pub enum DatasetType {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ShardingType {
+    #[serde(rename = "neuroglancer_uint64_sharded_v1")]
+    NeuroglancerUint64ShardedV1,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ShardingHashType {
+    Identity,
+    Murmurhash3_x86_128,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum MinishardIndexEncoding {
+    Raw,
+    Gzip,
+}
+
+impl Default for MinishardIndexEncoding {
+    fn default() -> MinishardIndexEncoding {
+        MinishardIndexEncoding::Raw
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ShardingChunkDataEncoding {
+    Raw,
+    Gzip,
+}
+
+impl Default for ShardingChunkDataEncoding {
+    fn default() -> ShardingChunkDataEncoding {
+        ShardingChunkDataEncoding::Raw
+    }
+}
+
+// See: https://github.com/google/neuroglancer/blob/master/src/datasource/precomputed/sharded.md#sharding-specification
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ShardingSpecification {
+    #[serde(rename = "@type")]
+    pub sharding_type: Option<ShardingType>,
+    pub preshift_bits: u64,
+    pub hash: ShardingHashType,
+    pub minishard_bits: u64,
+    pub shard_bits: u64,
+
+    #[serde(default = "MinishardIndexEncoding::default")]
+    pub minishard_index_encoding: MinishardIndexEncoding,
+
+    #[serde(default = "ShardingChunkDataEncoding::default")]
+    pub data_encoding: ShardingChunkDataEncoding,
+}
+
+impl ShardingSpecification {
+    pub fn new(
+        sharding_type: Option<ShardingType>,
+        preshift_bits: u64,
+        hash: ShardingHashType,
+        minishard_bits: u64,
+        shard_bits: u64,
+        minishard_index_encoding: MinishardIndexEncoding,
+        data_encoding: ShardingChunkDataEncoding,
+    ) -> ShardingSpecification {
+
+        // FIXME: Implement like in cloud volume
+        //let minishard_mask = self.compute_minishard_mask(self.minishard_bits)
+        //let shard_mask = self.compute_shard_mask(self.shard_bits, self.minishard_bits)
+        //self.validate()
+
+        ShardingSpecification {
+            sharding_type,
+            preshift_bits,
+            hash,
+            minishard_bits,
+            shard_bits,
+            minishard_index_encoding,
+            data_encoding,
+        }
+    }
+
+    pub fn index_length(self) -> u64 {
+        (2 ** &self.minishard_bits) * 16
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct ScaleEntry {
+    // Array of 3-element [x, y, z] arrays of integers specifying the x, y, and z dimensions in
+    // voxels of each supported chunk size. Typically just a single chunk size will be specified as
+    // [[x, y, z]].
     pub chunk_sizes: Vec<ChunkSize>,
 
-    /// Compression scheme for voxel data in each block.
+    // Specifies the encoding of the chunk data. Must be a string value equal (case-insensitively)
+    // to the name of one of the supported VolumeChunkEncoding values specified in base.ts. May be
+    // one of "raw", "jpeg", or "compressed_segmentation".
     #[serde(skip_serializing)]
     #[serde(default = "compression::CompressionType::default")]
     pub encoding: compression::CompressionType,
 
+    // String value specifying the subdirectory containing the chunked representation of the volume
+    // at this scale. May also be a relative path "/"-separated path, optionally containing ".."
+    // components, which is interpreted relative to the parent directory of the "info" file.
     pub key: String,
+    // 3-element array [x, y, z] of numeric values specifying the x, y, and z dimensions of a voxel
+    // in nanometers. The x, y, and z "resolution" values must not decrease as the index into the
+    // "scales" array increases.
     pub resolution: ResolutionType,
+    // 3-element array [x, y, z] of integers specifying the x, y, and z dimensions of the volume in voxels.
     pub size: GridCoord,
 
+    // Optional. If specified, must be a 3-element array [x, y, z] of integer values specifying a
+    // translation in voxels of the origin of the data relative to the global coordinate frame. If
+    // not specified, defaults to [0, 0, 0].
     #[serde(default = "OffsetCoord::default")]
     pub voxel_offset: OffsetCoord,
+
+    // If specified, indicates that volumetric chunk data is stored using the sharded format. Must
+    // be a sharding specification. If the sharded format is used, the "chunk_sizes" member must
+    // specify only a single chunk size. If unspecified, the unsharded format is used.
+    pub sharding: Option<ShardingSpecification>,
 }
 
 type NgPreEndian = LittleEndian;

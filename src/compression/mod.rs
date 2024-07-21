@@ -59,24 +59,30 @@ impl Default for CompressionType {
 impl Compression for CompressionType {
     fn decoder<'a, R: Read + 'a>(&self, r: R) -> Box<dyn Read + 'a> {
         match *self {
+            //CompressionType::Raw => raw::RawCompression::default().decoder(r),
             CompressionType::Raw(ref c) => c.decoder(r),
 
             #[cfg(feature = "gzip")]
+            //CompressionType::Gzip => gzip::GzipCompression::default().decoder(r),
             CompressionType::Gzip(ref c) => c.decoder(r),
 
             #[cfg(feature = "jpeg")]
+            //CompressionType::Jpeg => jpeg::JpegCompression::default().decoder(r),
             CompressionType::Jpeg(ref c) => c.decoder(r),
         }
     }
 
     fn encoder<'a, W: Write + 'a>(&self, w: W) -> Box<dyn Write + 'a> {
         match *self {
+            //CompressionType::Raw => raw::RawCompression::default().encoder(w),
             CompressionType::Raw(ref c) => c.encoder(w),
 
             #[cfg(feature = "gzip")]
+            //CompressionType::Gzip => gzip::GzipCompression::default().encoder(w),
             CompressionType::Gzip(ref c) => c.encoder(w),
 
             #[cfg(feature = "jpeg")]
+            //CompressionType::Jpeg => jpeg::JpegCompression::default().encoder(w),
             CompressionType::Jpeg(ref c) => c.encoder(w),
         }
     }
@@ -85,12 +91,15 @@ impl Compression for CompressionType {
 impl std::fmt::Display for CompressionType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match *self {
+            //CompressionType::Raw => "Raw",
             CompressionType::Raw(_) => "Raw",
 
             #[cfg(feature = "gzip")]
+            //CompressionType::Gzip => "Gzip",
             CompressionType::Gzip(_) => "Gzip",
 
             #[cfg(feature = "jpeg")]
+            //CompressionType::Jpeg => "Jpeg",
             CompressionType::Jpeg(_) => "Jpeg",
         })
     }
@@ -118,12 +127,14 @@ macro_rules! compression_from_impl {
     ($variant:ident, $c_type:ty) => {
         impl std::convert::From<$c_type> for CompressionType {
             fn from(c: $c_type) -> Self {
+                //CompressionType::$variant::default()
                 CompressionType::$variant(c)
             }
         }
     }
 }
 
+//compression_from_impl!(<crate::prelude::CompressionType>::Raw, raw::RawCompression);
 compression_from_impl!(Raw, raw::RawCompression);
 #[cfg(feature = "gzip")]
 compression_from_impl!(Gzip, gzip::GzipCompression);
