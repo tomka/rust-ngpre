@@ -82,7 +82,8 @@ pub enum ShardingType {
 #[serde(rename_all = "lowercase")]
 pub enum ShardingHashType {
     Identity,
-    Murmurhash3_x86_128,
+    #[serde(rename = "murmurhash3_x86_128")]
+    Murmurhash3X86_128,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
