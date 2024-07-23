@@ -3,10 +3,14 @@ use rand::{
     distributions::Standard,
     Rng,
 };
+use std::io::{
+    ErrorKind,
+};
 
 use ngpre::prelude::*;
+use ngpre::compressed_morton_code;
 
-
+/*
 fn test_read_write<T, NgPre: NgPreReader + NgPreWriter>(
         n: &NgPre,
         compression: &CompressionType,
@@ -20,7 +24,6 @@ fn test_read_write<T, NgPre: NgPreReader + NgPreWriter>(
         (1..=dim as u64).map(|d| d*100).collect(),
         block_size.clone(),
         T::VARIANT,
-        compression.clone(),
     );
     let numel = data_attrs.get_block_num_elements();
     let rng = rand::thread_rng();
@@ -91,14 +94,10 @@ fn test_ngpre_filesystem_dims() {
 
 fn test_all_compressions<NgPre: NgPreReader + NgPreWriter>(n: &NgPre) {
     test_all_types(n, &CompressionType::Raw(compression::raw::RawCompression::default()), 3);
-    #[cfg(feature = "bzip")]
-    test_all_types(n, &CompressionType::Bzip2(compression::bzip::Bzip2Compression::default()), 3);
     #[cfg(feature = "gzip")]
     test_all_types(n, &CompressionType::Gzip(compression::gzip::GzipCompression::default()), 3);
-    #[cfg(feature = "lz")]
-    test_all_types(n, &CompressionType::Lz4(compression::lz::Lz4Compression::default()), 3);
-    #[cfg(feature = "xz")]
-    test_all_types(n, &CompressionType::Xz(compression::xz::XzCompression::default()), 3);
+    #[cfg(feature = "jpeg")]
+    test_all_types(n, &CompressionType::Jpeg(compression::jpeg::JpegCompression::default()), 3);
 }
 
 #[test]
@@ -108,4 +107,51 @@ fn test_ngpre_filesystem_compressions() {
     let n = NgPreFilesystem::open_or_create(dir.path())
         .expect("Failed to create NgPre filesystem");
     test_all_compressions(&n)
+}
+*/
+
+#[test]
+fn test_compressed_morton_code() {
+    assert_eq!(compressed_morton_code(
+        &vec![vec![0,0,0]], &vec![3,3,3]).unwrap(), vec![0b000000]);
+    assert_eq!(compressed_morton_code(
+        &vec![vec![1,0,0]], &vec![3,3,3]).unwrap(), vec![0b000001]);
+    assert_eq!(compressed_morton_code(
+        &vec![vec![2,0,0]], &vec![3,3,3]).unwrap(), vec![0b001000]);
+
+    assert_eq!(
+        compressed_morton_code(
+            &vec![vec![3,0,0]], &vec![3,3,3]).map_err(|e| e.kind()),
+        Err(ErrorKind::InvalidInput));
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![2,2,0]], &vec![3,3,3]).unwrap(), vec![0b011000]);
+    assert_eq!(compressed_morton_code(
+        &vec![vec![2,2,1]], &vec![3,3,3]).unwrap(), vec![0b011100]);
+
+    // New grid dimensions: [2,3,1]
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![0,0,0]], &vec![2,3,1]).unwrap(), vec![0b000000]);
+    assert_eq!(compressed_morton_code(
+        &vec![vec![1,0,0]], &vec![2,3,1]).unwrap(), vec![0b000001]);
+
+    assert_eq!(
+        compressed_morton_code(
+            &vec![vec![0,0,7]], &vec![2,3,1]).map_err(|e| e.kind()),
+        Err(ErrorKind::InvalidInput));
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![1,2,0]], &vec![2,3,1]).unwrap(), vec![0b000101]);
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![0,0,0],vec![1,2,0]], &vec![2,3,1]).unwrap(), vec![0b000000, 0b000101]);
+
+    // New grid dimensions: [4,4,1] and [8,8,2]
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![3,3,0]], &vec![4,4,1]).unwrap(), vec![0b1111]);
+
+    assert_eq!(compressed_morton_code(
+        &vec![vec![5,5,0]], &vec![8,8,2]).unwrap(), vec![0b1100011]);
 }

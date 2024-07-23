@@ -23,6 +23,10 @@ use std::io::{
 };
 use std::marker::PhantomData;
 use std::time::SystemTime;
+use std::cmp;
+//use std::error::Error;
+use std::fmt;
+use std::num::NonZeroU32;
 
 use byteorder::{
     LittleEndian,
@@ -60,9 +64,10 @@ pub type CoordVec<T> = SmallVec<[T; COORD_SMALLVEC_SIZE]>;
 pub type BlockCoord = CoordVec<u32>;
 pub type GridCoord = CoordVec<u64>;
 pub type UnboundedGridCoord = CoordVec<i64>;
-pub type OffsetCoord = CoordVec<i32>;
+pub type OffsetCoord = CoordVec<i64>;
 pub type ChunkSize = CoordVec<u32>;
 pub type ResolutionType = CoordVec<f32>;
+pub type BBox<T> = SmallVec<[T; 2]>;
 
 /// Data types representable in NgPre.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
@@ -415,7 +420,7 @@ impl DatasetAttributes {
         &self.scales[zoom_level].chunk_sizes[0]
     }
 
-    pub fn get_voxel_offset(&self, zoom_level: usize) -> &[i32] {
+    pub fn get_voxel_offset(&self, zoom_level: usize) -> &UnboundedGridCoord {
         &self.scales[zoom_level].voxel_offset
     }
 
@@ -457,6 +462,17 @@ impl DatasetAttributes {
             .collect()
     }
 
+    pub fn bounds(&self, zoom_level: usize) -> BBox::<UnboundedGridCoord> {
+        let offset = self.get_voxel_offset(zoom_level).iter().cloned();
+        BBox::from_vec(vec![
+            offset.collect(),
+            self.get_dimensions(zoom_level).iter()
+                .zip(self.get_voxel_offset(zoom_level).iter().cloned())
+                .map(|(d, o)| o.checked_add_unsigned(*d).unwrap())
+                .collect()
+        ])
+    }
+
     /// Get the total number of blocks.
     /// ```
     /// use ngpre::prelude::*;
@@ -491,6 +507,11 @@ impl DatasetAttributes {
         self.get_grid_extent(zoom_level).iter()
             .zip(grid_position.iter())
             .all(|(&bound, &coord)| coord < bound)
+    }
+
+    pub fn is_sharded(&self, zoom_level: usize) -> bool {
+        let scale = &self.get_scales()[zoom_level];
+        scale.sharding.is_some()
     }
 }
 
@@ -783,6 +804,69 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct MortonCodeError(String);
+
+impl fmt::Display for MortonCodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MortonCodeError: {}", self.0)
+    }
+}
+
+impl std::error::Error for MortonCodeError {}
+
+// gridpt: a list of 3d index locations in the grid of chunks (e.g. [(1,1,1)]
+// grid_size:
+pub fn compressed_morton_code(gridpt: &Vec<Vec<u64>>, grid_size: &Vec<u64>) -> Result<Vec<u64>, Error> {
+    // Check if the input is empty
+    if gridpt.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut code: Vec<u64> = vec![0; gridpt.len()];
+    let num_bits: Vec<usize> = grid_size.iter().map(|&size| (size as f64).log(2.0).ceil() as usize).collect();
+    let mut j: u64 = 0;
+    let one: u64 = 1;
+
+    // Check if the total number of bits exceeds 64
+    if num_bits.iter().sum::<usize>() > 64 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Total number of bits exceeds 64"))
+    }
+
+    // Check if any coordinates exceed the grid size
+    for coords in gridpt {
+        if coords.iter().zip(grid_size.iter()).any(|(a,b)| a >= b) {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Coordinate exceeds grid size"))
+        }
+    }
+
+    // Compute the Morton code
+    for i in 0..*num_bits.iter().max().unwrap_or(&0) {
+        for dim in 0..3 {
+            // If 2 ** i fits into the grid size dimension
+            if (1 << i) < grid_size[dim] {
+                for (index, coords) in gridpt.iter().enumerate() {
+                    let bit = ((coords[dim] >> i) & one) << j;
+                    code[index] |= bit;
+                }
+                j += one;
+            }
+        }
+    }
+
+    /*
+    // Return the result
+    if single_input {
+        return Ok(code[0]);
+    }
+    */
+    Ok(code) // Return the entire code vector if needed
 }
 
 // TODO: needed because cannot invoke type parameterized static trait methods
