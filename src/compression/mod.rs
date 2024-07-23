@@ -9,18 +9,8 @@ use serde::{
 
 
 pub mod raw;
-#[cfg(feature = "bzip")]
-pub mod bzip;
 #[cfg(feature = "gzip")]
 pub mod gzip;
-#[cfg(feature = "lz")]
-pub mod lz;
-#[cfg(feature = "lz_pure")]
-pub(self) mod lz_pure;
-#[cfg(feature = "lz_pure")]
-pub mod lz { pub use super::lz_pure::*; }
-#[cfg(feature = "xz")]
-pub mod xz;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
 
