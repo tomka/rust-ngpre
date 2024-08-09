@@ -4,6 +4,8 @@
 
 #![deny(missing_debug_implementations)]
 #![forbid(unsafe_code)]
+#![feature(slice_as_chunks)]
+#![feature(int_roundings)]
 
 
 // TODO: this does not run the test for recent stable rust because `test`
@@ -16,17 +18,20 @@ doc_comment::doctest!("../README.md");
 #[macro_use]
 pub extern crate smallvec;
 
-
+use std::convert::TryInto;
+use std::convert::TryFrom;
+use std::ops::Div;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{
     Error,
     ErrorKind,
 };
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::time::SystemTime;
-use std::cmp;
-//use std::error::Error;
-use std::fmt;
-use std::num::NonZeroU32;
+use std::path::Path;
+use std::path::PathBuf;
 
 use byteorder::{
     LittleEndian,
@@ -34,13 +39,19 @@ use byteorder::{
     ReadBytesExt,
     WriteBytesExt,
 };
+use lru::LruCache;
 use serde::{
     Deserialize,
     Serialize,
 };
 use smallvec::SmallVec;
 
+use std::io::Cursor;
+//use murmur3::murmur3_x86_128;
+use flate2::read::GzDecoder;
+
 use crate::compression::Compression;
+use crate::compression::gzip::GzipCompression;
 
 pub mod compression;
 #[macro_use]
@@ -117,6 +128,46 @@ impl Default for ShardingChunkDataEncoding {
     }
 }
 
+// FIXME: Why add the + std::convert::AsRef...?
+/*
+pub fn murmur3_x86_64<T: Read + std::convert::AsRef<[u8]>>(val_as_bytes: &mut T, seed: u32) -> Result<(i64, i64), Error> {
+    let hash_128_r = murmur3_x86_128(&mut Cursor::new(val_as_bytes), seed);
+
+    if hash_128_r.is_err() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Could not generate hash"))
+    }
+
+    let hash_128 = hash_128_r.unwrap();
+
+    let unsigned_val1 = hash_128 & 0xFFFFFFFFFFFFFFFF;
+    let mut signed_val1: i64;
+    if unsigned_val1 & 0x8000000000000000 == 0 {
+        signed_val1 = unsigned_val1;
+    } else {
+        signed_val1 = -( (unsigned_val1 ^ 0xFFFFFFFFFFFFFFFF) + 1 );
+    }
+
+    let unsigned_val2 = ( hash_128 >> 64 ) & 0xFFFFFFFFFFFFFFFF;
+    let mut signed_val2: i64;
+    if unsigned_val2 & 0x8000000000000000 == 0 {
+        signed_val2 = unsigned_val2;
+    } else {
+        signed_val2 = -( (unsigned_val2 ^ 0xFFFFFFFFFFFFFFFF) + 1 );
+    }
+
+    ( signed_val1, signed_val2 )
+}
+*/
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ShardLocation {
+    pub shard_number: String,
+    pub minishard_number: u64,
+    pub remainder: u64,
+}
+
 // See: https://github.com/google/neuroglancer/blob/master/src/datasource/precomputed/sharded.md#sharding-specification
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct ShardingSpecification {
@@ -132,6 +183,9 @@ pub struct ShardingSpecification {
 
     #[serde(default = "ShardingChunkDataEncoding::default")]
     pub data_encoding: ShardingChunkDataEncoding,
+
+    pub minishard_mask: u64,
+    pub shard_mask: u64,
 }
 
 impl ShardingSpecification {
@@ -145,12 +199,7 @@ impl ShardingSpecification {
         data_encoding: ShardingChunkDataEncoding,
     ) -> ShardingSpecification {
 
-        // FIXME: Implement like in cloud volume
-        //let minishard_mask = self.compute_minishard_mask(self.minishard_bits)
-        //let shard_mask = self.compute_shard_mask(self.shard_bits, self.minishard_bits)
-        //self.validate()
-
-        ShardingSpecification {
+        let mut spec = ShardingSpecification {
             sharding_type,
             preshift_bits,
             hash,
@@ -158,11 +207,96 @@ impl ShardingSpecification {
             shard_bits,
             minishard_index_encoding,
             data_encoding,
-        }
+            minishard_mask: 0,
+            shard_mask: 0,
+        };
+
+        spec.compute_masks();
+
+        spec
     }
 
-    pub fn index_length(self) -> u64 {
+    pub fn compute_masks(&mut self) {
+        self.minishard_mask = self.compute_minishard_mask(self.minishard_bits);
+        self.shard_mask = self.compute_shard_mask(self.shard_bits, self.minishard_bits);
+        //self.validate()
+    }
+
+    /*
+    def compute_minishard_mask(self, val):
+        if val < 0:
+            raise ValueError(str(val) + " must be greater or equal to than zero.")
+        elif val == 0:
+            return uint64(0)
+
+        minishard_mask = uint64(1)
+        for i in range(val - uint64(1)):
+            minishard_mask <<= uint64(1)
+            minishard_mask |= uint64(1)
+        return uint64(minishard_mask)
+    */
+    pub fn compute_minishard_mask(&self, val: u64) -> u64 {
+        0
+    }
+
+     /*
+     def compute_shard_mask(self, shard_bits, minishard_bits):
+         ones64 = uint64(0xffffffffffffffff)
+         movement = uint64(minishard_bits + shard_bits)
+         shard_mask = ~((ones64 >> movement) << movement)
+         minishard_mask = self.compute_minishard_mask(minishard_bits)
+         return shard_mask & (~minishard_mask)j
+    */
+    pub fn compute_shard_mask(&self, shard_bits: u64, minishard_bits: u64) -> u64 {
+        0
+    }
+
+
+    pub fn index_length(&self) -> u64 {
         (2 ** &self.minishard_bits) * 16
+    }
+
+    pub fn hashfn(&self, val: u64) -> u64 {
+        if self.hash == ShardingHashType::Murmurhash3X86_128 {
+            // return uint64(mmh3.hash64(uint64(x).tobytes(), x64arch=False)[0])
+            //let val_as_bytes = val.to_be_bytes();
+            //let hash_result = murmur3_x86_64(&mut Cursor::new(val_as_bytes), 0);
+            //return hash_result.unwrap() as u64;
+            unimplemented!();
+        }
+
+        // Default to identity hash
+        val as u64
+    }
+
+    /*
+    def compute_shard_location(self, key):
+        chunkid = uint64(key) >> uint64(self.preshift_bits)
+        chunkid = self.hashfn(chunkid)
+        minishard_number = uint64(chunkid & self.minishard_mask)
+        shard_number = uint64((chunkid & self.shard_mask) >> uint64(self.minishard_bits))
+        shard_number = format(shard_number, 'x').zfill(int(np.ceil(self.shard_bits / 4.0)))
+        remainder = chunkid >> uint64(self.minishard_bits + self.shard_bits)
+
+        return ShardLocation(shard_number, minishard_number, remainder)
+    */
+    pub fn compute_shard_location(&self, key:u64) -> ShardLocation {
+        let shifted_chunkid = key >> self.preshift_bits;
+        let chunkid = self.hashfn(shifted_chunkid);
+        let minishard_number = (key & self.minishard_mask) as u64;
+        let shard_number = ((chunkid & self.shard_mask) as u64 >> self.minishard_bits) as u64;
+        // Lower case hex formatting of shard_number and zfill with zeros for a total length of a
+        // quarter of the shard_bits.
+        let width = self.shard_bits.div_ceil(4) as usize;
+        let normalized_shard_number = format!("{:01$x}!", shard_number, width);
+
+        let remainder = chunkid >> ((self.minishard_bits + self.shard_bits) as u64);
+
+        ShardLocation {
+            shard_number: normalized_shard_number,
+            minishard_number: minishard_number,
+            remainder: remainder
+        }
     }
 }
 
@@ -234,6 +368,27 @@ pub struct DataBlockMetadata {
     pub accessed: Option<SystemTime>,
     pub modified: Option<SystemTime>,
     pub size: Option<u64>,
+}
+
+pub fn u8_to_u64_array(
+	array: &[u8],
+	result: &mut [u64],
+) {
+    let n = result.len();
+    let (result, array) = (&mut result[..n], &array.as_chunks().0[..n]);
+    for i in 0..n {
+        result[i] = u64::from_be_bytes(array[i]);
+    }
+}
+
+pub fn u64_to_u8_array(
+	array: &[u64],
+	result: &mut [u8],
+) {
+    let n = array.len();
+    for i in 0..n {
+        result[4*i..4*(i+1)][..4].copy_from_slice(&array[i].to_be_bytes());
+    }
 }
 
 /// Non-mutating operations on NgPre containers.
@@ -408,6 +563,10 @@ impl DatasetAttributes {
         }
     }
 
+    pub fn get_key(&self, zoom_level: usize) -> &str {
+        &self.scales[zoom_level].key
+    }
+
     pub fn get_compression(&self, zoom_level: usize) -> &compression::CompressionType {
         &self.scales[zoom_level].encoding
     }
@@ -420,7 +579,7 @@ impl DatasetAttributes {
         &self.scales[zoom_level].chunk_sizes[0]
     }
 
-    pub fn get_voxel_offset(&self, zoom_level: usize) -> &UnboundedGridCoord {
+    pub fn get_voxel_offset(&self, zoom_level: usize) -> &[i64] {
         &self.scales[zoom_level].voxel_offset
     }
 
@@ -513,6 +672,14 @@ impl DatasetAttributes {
         let scale = &self.get_scales()[zoom_level];
         scale.sharding.is_some()
     }
+
+    pub fn get_sharding_spec(&self, zoom_level: usize) -> Option<&ShardingSpecification> {
+        let sharding = &self.get_scales()[zoom_level].sharding;
+        match &sharding {
+            Some(e) => Some(&e),
+            None => None
+        }
+    }
 }
 
 
@@ -542,6 +709,8 @@ pub trait ReadableDataBlock {
     /// Read the stream directly into the block data instead of creating a copied
     /// byte buffer.
     fn read_data<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
+
+    //fn read_data_sharded<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
 }
 
 /// Traits for data blocks that can write out data.
@@ -729,7 +898,6 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
                 "Attempt to create data block for wrong type."))
         }
 
-        // FIXME
         let zoom_level = 0;
         let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
 
@@ -739,7 +907,6 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
         // smaller blocks on the edges.
         let _ = block.read_data(&mut decompressed);
-
         Ok(block)
     }
 
@@ -806,17 +973,6 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
     }
 }
 
-#[derive(Debug)]
-struct MortonCodeError(String);
-
-impl fmt::Display for MortonCodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MortonCodeError: {}", self.0)
-    }
-}
-
-impl std::error::Error for MortonCodeError {}
-
 // gridpt: a list of 3d index locations in the grid of chunks (e.g. [(1,1,1)]
 // grid_size:
 pub fn compressed_morton_code(gridpt: &Vec<Vec<u64>>, grid_size: &Vec<u64>) -> Result<Vec<u64>, Error> {
@@ -838,7 +994,7 @@ pub fn compressed_morton_code(gridpt: &Vec<Vec<u64>>, grid_size: &Vec<u64>) -> R
     }
 
     // Check if any coordinates exceed the grid size
-    for coords in gridpt {
+    for coords in gridpt.iter() {
         if coords.iter().zip(grid_size.iter()).any(|(a,b)| a >= b) {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -868,6 +1024,1007 @@ pub fn compressed_morton_code(gridpt: &Vec<Vec<u64>>, grid_size: &Vec<u64>) -> R
     */
     Ok(code) // Return the entire code vector if needed
 }
+
+pub fn basename(path: &String) -> String {
+    let upath = Path::new(&path).file_name().unwrap().to_str().unwrap();
+    upath.to_string()
+}
+
+#[derive(Debug)]
+pub struct PrecomputedMetadata {
+    cloudpath: String,
+}
+
+impl PrecomputedMetadata {
+
+    pub fn new(cloudpath: String) -> PrecomputedMetadata {
+
+        PrecomputedMetadata {
+            cloudpath,
+        }
+    }
+
+    fn join(&self, paths: Vec<&str>) -> Option<String> {
+        let mut path = PathBuf::new();
+        path.extend(paths);
+        Some(path.to_str().unwrap().to_owned())
+        /*
+        def join(self, *paths):
+            if self.path.protocol == 'file':
+            return os.path.join(*paths)
+            else:
+            return posixpath.join(*paths)
+        */
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct CacheService {
+
+}
+
+impl CacheService {
+
+    /*
+    def download_as(self, requests, compress=None, progress=None):
+        """
+        Works with byte ranges.
+
+        requests: [{
+            'path': ...,
+            'local_alias': ...,
+            'start': ...,
+            'end': ...,
+        }]
+        """
+        if len(requests) == 0:
+            return {}
+
+        progress = progress if progress is not None else self.config.progress
+
+        aliases = [ req['local_alias'] for req in requests ]
+        alias_tuples = { req['local_alias']: (req['path'], req['start'], req['end']) for req in requests }
+        alias_to_path = { req['local_alias']: req['path'] for req in requests }
+        path_to_alias = { v:k for k,v in alias_tuples.items() }
+
+        if None in alias_to_path:
+            del alias_to_path[None]
+            del alias_tuples[None]
+
+        locs = self.compute_data_locations(aliases)
+
+        fragments = {}
+        if self.enabled:
+        fragments = self.get(locs['local'], progress=progress)
+        keys = list(fragments.keys())
+        for key in keys:
+            return_key = (alias_to_path[key], alias_tuples[key][1], alias_tuples[key][2])
+            fragments[return_key] = fragments[key]
+            del fragments[key]
+        for alias in locs['local']:
+            del alias_tuples[alias]
+
+        remote_path_tuples = list(alias_tuples.values())
+
+        cf = CloudFiles(
+            self.meta.cloudpath,
+            progress=progress,
+            secrets=self.config.secrets,
+            parallel=self.config.parallel,
+            locking=self.config.cache_locking,
+        )
+        remote_fragments = cf.get(
+            ( { 'path': p[0], 'start': p[1], 'end': p[2] } for p in remote_path_tuples ),
+            total=len(remote_path_tuples),
+        )
+
+        for frag in remote_fragments:
+            if frag['error'] is not None:
+                raise frag['error']
+
+        remote_fragments = {
+            (res['path'], res['byte_range'][0], res['byte_range'][1]): res['content'] \
+            for res in remote_fragments
+        }
+
+        if self.enabled:
+            self.put(
+                [
+                (path_to_alias[file_bytes_tuple], content) \
+                for file_bytes_tuple, content in remote_fragments.items() \
+                if content is not None
+                ],
+                compress=compress,
+                progress=progress
+            )
+
+        fragments.update(remote_fragments)
+        return fragments
+    */
+    pub fn download_as(&self, requests: Vec<IndexFileDetails>, progess: Option<bool>)
+            -> HashMap::<(String, u64, u64), Vec<u8>> {
+        let results = HashMap::new();
+
+        results
+    }
+
+    /*
+    def get(self, cloudpaths, progress=None):
+        progress = self.config.progress if progress is None else progress
+
+        cf = CloudFiles(
+        'file://' + self.path,
+        progress=progress,
+        locking=self.config.cache_locking,
+        )
+        return cf.get(cloudpaths, return_dict=True)
+    */
+    pub fn get(&self) -> u64 {
+        0
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ShardingFileRange {
+    path: String,
+    start: u64,
+    end: u64,
+}
+
+#[derive(Clone, Debug)]
+struct BundleSubrange {
+    start: u64,
+    length: u64,
+    // TODO: In Python this is a slice() object, defining a range
+    slice_start: usize,
+    slice_end: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ShardingBundle {
+    path: String,
+    start: u64,
+    end: u64,
+    content: Option<Vec<u8>>,
+    subranges: Vec<BundleSubrange>,
+}
+
+struct BundleDetails {
+    path: String,
+    byte_range_start: u64,
+    byte_range_end: u64,
+    error: Option<String>,
+    content: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct IndexFileDetails {
+    path: String,
+    local_alias: String,
+    start: u64,
+    end: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct CloudFiles {
+    path: String,
+    progress: bool,
+    parallel: u32,
+}
+
+impl CloudFiles {
+    pub fn new(path: String, progress: bool, parallel: u32) -> Self {
+        Self {
+            path,
+            progress,
+            parallel,
+        }
+    }
+
+    pub fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
+        vec![]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ShardReader<'a> {
+    meta: &'a PrecomputedMetadata,
+    cache: &'a CacheService,
+    spec: &'a ShardingSpecification,
+    shard_index_cache: LruCache<String, Option<Vec<(u64, u64)>>>,
+    minishard_index_cache: LruCache<(String, u64, u64), Option<Vec<(u64, u64, u64)>>>,
+}
+
+impl<'a> ShardReader<'a> {
+    pub fn new(
+        meta: &'a PrecomputedMetadata,
+        cache: &'a CacheService,
+        spec: &'a ShardingSpecification,
+        shard_index_cache_size:Option<NonZeroUsize>,
+        minishard_index_cache_size:Option<NonZeroUsize>,
+    ) -> Self {
+
+        Self {
+            meta: meta,
+            cache: cache,
+            spec: spec,
+            shard_index_cache: LruCache::new(
+                shard_index_cache_size.unwrap_or(NonZeroUsize::new(512).unwrap())),
+            minishard_index_cache: LruCache::new(
+                minishard_index_cache_size.unwrap_or(NonZeroUsize::new(128).unwrap())),
+        }
+    }
+
+    /*
+    def get_data(
+        self, label:int, path:str = "",
+        progress:Optional[bool] = None, parallel:int = 1,
+        raw:bool = False
+    ):
+        """Fetches data from shards.
+
+        label: one or more segment ids
+        path: subdirectory path
+        progress: display progress bars
+        parallel: (int >= 0) use multiple processes
+        raw: if true, don't decompress or decode stream
+
+        Return:
+        if label is a scalar:
+            a byte string
+        else: (label is an iterable)
+            {
+            label_1: byte string,
+            ....
+            }
+        """
+        label, return_multiple = toiter(label, is_iter=True)
+        label = set(( int(l) for l in label))
+        if not label:
+        return {}
+
+        cached = {}
+        if self.cache.enabled:
+        cached = self.cache.get([
+            self.meta.join(path, str(lbl)) for lbl in label
+        ], progress=progress)
+
+        results = {}
+        for cloudpath, content in cached.items():
+        lbl = int(basename(cloudpath))
+        if content is not None:
+            label.remove(lbl)
+
+        results[lbl] = cached[cloudpath]
+
+        del cached
+
+        # { label: [ filename, byte start, num_bytes ] }
+        exists = self.exists(label, path, return_byte_range=True, progress=progress)
+        for k in list(exists.keys()):
+            if exists[k] is None:
+                results[k] = None
+                del exists[k]
+
+        key_label = { (basename(v[0]), v[1], v[2]): k for k,v in exists.items() }
+
+        files = (
+        { 'path': basename(ext[0]), 'start': int(ext[1]), 'end': int(ext[1]) + int(ext[2]) }
+        for ext in exists.values()
+        )
+
+        # Requesting many individual shard chunks is slow, but due to z-ordering
+        # we might be able to combine adjacent byte ranges. Especially helpful
+        # when downloading entire shards!
+        bundles = []
+        for chunk in sorted(files, key=itemgetter("path", "start")):
+            if not bundles or (chunk['path'] != bundles[-1]['path']) or (chunk['start'] != bundles[-1]['end']):
+                bundles.append(dict(content=None, subranges=[], **chunk))
+            else:
+                bundles[-1]['end'] = chunk['end']
+
+            bundles[-1]['subranges'].append({
+                'start': chunk['start'],
+                'length': chunk['end'] - chunk['start'],
+                'slices': slice(chunk['start'] - bundles[-1]['start'], chunk['end'] - bundles[-1]['start'])
+            })
+
+        full_path = self.meta.join(self.meta.cloudpath, path)
+        bundles_resp = CloudFiles(
+            full_path,
+            progress=("Downloading Bundles" if progress else False),
+            green=self.green,
+            parallel=parallel,
+            ).get(bundles)
+
+        # Responses are not guaranteed to be in order of requests
+        bundles_resp = { (r['path'], r['byte_range']): r for r in bundles_resp }
+
+        binaries = {}
+        for bundle_req in bundles:
+            bundle_resp = bundles_resp[(bundle_req['path'], (bundle_req['start'], bundle_req['end']))]
+            if bundle_resp['error']:
+                raise bundle_resp['error']
+
+            for chunk in bundle_req['subranges']:
+                key = (bundle_req['path'], chunk['start'], chunk['length'])
+                lbl = key_label[key]
+                binaries[lbl] = bundle_resp['content'][chunk['slices']]
+
+        del bundles
+        del bundles_resp
+
+        if not raw and self.spec.data_encoding != 'raw':
+        for filepath, binary in tqdm(binaries.items(), desc="Decompressing", disable=(not progress)):
+            if binary is None:
+            continue
+            binaries[filepath] = compression.decompress(
+            binary, encoding=self.spec.data_encoding, filename=filepath
+            )
+
+        if self.cache.enabled:
+        self.cache.put([
+            (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
+        ], progress=progress)
+
+        results.update(binaries)
+
+        if return_multiple:
+        return results
+        return first(results.values())
+    */
+    /// Fetches data from shards.
+    ///
+    /// label: one or more segment ids
+    /// path: subdirectory path
+    /// progress: display progress bars
+    /// parallel: (int >= 0) use multiple processes
+    /// raw: if true, don't decompress or decode stream
+    ///
+    /// Returns: map of label vs. bytestring
+    ///
+    pub fn get_data(&mut self, labels: &Vec<u64>, path:Option<&str>,
+        progress:Option<bool>, parallel:Option<u32>,
+        raw:Option<bool>) -> Result<HashMap<u64, Option<Vec<u8>>>, Error>
+    {
+        let _path = path.unwrap_or("");
+        let _parallel = parallel.unwrap_or(1);
+        let _raw = raw.unwrap_or(true);
+
+        if labels.len() == 0 {
+            return Ok(HashMap::new())
+        }
+
+        // TODO: Cache logic
+
+        let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+
+        // { label: [ filename, byte start, num_bytes ] }
+        let mut exists = self.exists(labels, Some(_path), Some(true), progress);
+        let mut non_existing: Vec<u64> = Vec::new();
+        for (k, v) in exists.iter() {
+            if v.is_none() {
+                non_existing.push(*k);
+            }
+        }
+        for k in non_existing.iter() {
+            results.insert(*k, None);
+            exists.remove(k);
+        }
+
+        let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
+        let mut files: Vec<ShardingFileRange> = Vec::new();
+        for (k, v) in exists.iter() {
+            let _v = v.as_ref().unwrap();
+            let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
+            key_label.insert(
+                (upath.to_string(), _v.1, _v.2),
+                *k);
+            files.push(ShardingFileRange {
+                    path: upath.to_string(),
+                    start: _v.1,
+                    end: _v.1.checked_add(_v.2).unwrap(),
+                });
+        }
+
+
+        // Requesting many individual shard chunks is slow, but due to z-ordering
+        // we might be able to combine adjacent byte ranges. Especially helpful
+        // when downloading entire shards!
+        // TODO: implement sorting of files into bundles
+        let mut sorted_files = files.to_vec();
+        sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
+        let mut bundles: Vec<ShardingBundle> = Vec::new();
+        for chunk in sorted_files.iter_mut() {
+            if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
+                    || (chunk.start != bundles.last().unwrap().end)
+            {
+                bundles.push(ShardingBundle {
+                    content: None,
+                    subranges: vec![],
+                    path: chunk.path.clone(),
+                    start: chunk.start,
+                    end: chunk.end,
+                });
+            } else {
+                bundles.last_mut().unwrap().end = chunk.end;
+            }
+
+            let last_bundle_start = bundles.last_mut().unwrap().start;
+
+            bundles.last_mut().unwrap().subranges.push(
+                BundleSubrange {
+                    start: chunk.start,
+                    length: chunk.end - chunk.start,
+                    slice_start: (chunk.start - last_bundle_start) as usize,
+                    slice_end: (chunk.end - last_bundle_start) as usize,
+                })
+        }
+
+        let full_path = self.meta.join(vec![&self.meta.cloudpath, _path]).unwrap();
+        let bundles_resp_list = CloudFiles::new(
+            full_path.to_string(), progress.unwrap_or(false), _parallel
+        ).get(&bundles); // FIXME
+                        //
+                        // Responses are not guaranteed to be in order of requests
+        let mut bundles_resp = HashMap::new();
+        for r in bundles_resp_list.iter() {
+            bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
+        }
+
+        let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+        for bundle_req in bundles.iter() {
+            let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
+            if bundle_resp_item.is_none() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */))
+            } else {
+                let bundle_resp = bundle_resp_item.unwrap();
+                for chunk in bundle_req.subranges.iter() {
+                    let key = (bundle_req.path.clone(), chunk.start, chunk.length);
+                    let lbl = key_label.get(&key).unwrap();
+                    binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
+                }
+            }
+        }
+
+        // TODO: Optional decode
+        if !_raw {
+            unimplemented!();
+        }
+
+        // TODO: Add data to caches, if enabled
+        // if self.cache.enabled:
+        //     self.cache.put([
+        //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
+        //     ], progress=_progress)
+
+        // Copy binary collection into result set
+        results.extend(binaries);
+
+        Ok(results)
+    }
+
+    /*
+    def exists(self, labels, path="", return_byte_range=False, progress=None):
+        """
+        """
+        return_one = False
+
+        try:
+            iter(labels)
+        except TypeError:
+            return_one = True
+
+        to_labels = defaultdict(list)
+        to_all_labels = defaultdict(list)
+        filename_to_minishard_num = defaultdict(list)
+
+        for label in set(toiter(labels)):
+            filename, minishard_number = self.compute_shard_location(label)
+            to_labels[(filename, minishard_number)].append(label)
+            to_all_labels[filename].append(label)
+            filename_to_minishard_num[filename].append(minishard_number)
+
+        indices = self.get_indices(to_all_labels.keys(), path, progress=progress)
+
+        all_minishards = self.get_minishard_indices_for_files([
+            (basename(filepath), index, filename_to_minishard_num[basename(filepath)]) \
+            for filepath, index in indices.items()
+            ], path, progress=progress)
+
+        results = {}
+        for filename, file_minishards in all_minishards.items():
+            filepath = self.meta.join(path, filename)
+            for mini_no, msi in file_minishards.items():
+                labels = to_labels[(filename, mini_no)]
+
+                for label in labels:
+                    if msi is None:
+                        results[label] = None
+                        continue
+
+                    idx = np.where(msi[:,0] == label)[0]
+                    if len(idx) == 0:
+                        results[label] = None
+                    else:
+                        if return_byte_range:
+                            _, offset, size = msi[idx,:][0]
+                            results[label] = [ filepath, int(offset), int(size) ]
+                        else:
+                            results[label] = filepath
+
+        if return_one:
+        return(list(results.values())[0])
+        return results
+    */
+    /// Checks a shard's minishard index for whether a file exists.
+    ///
+    /// If return_byte_range = False:
+    /// OUTPUT = SHARD_FILEPATH or None if not exists
+    /// Else:
+    /// OUTPUT = [ SHARD_FILEPATH or None, byte_start, num_bytes ]
+    ///
+    /// Returns:
+    /// If labels is not an iterable:
+    ///     return OUTPUT
+    /// Else:
+    ///     return { label_1: OUTPUT, label_2: OUTPUT, ... }
+    pub fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&str>, return_byte_range: Option<bool>,
+            progress:Option<bool>) -> HashMap<u64, Option<(String, u64, u64)>> {
+
+        let path = path_desc.unwrap_or("");
+
+        let mut to_labels: HashMap<(String, u64), Vec<u64>> = HashMap::new();
+        let mut to_all_labels: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut filename_to_minishard_num: HashMap<String, Vec<u64>> = HashMap::new();
+
+
+        let mut unique_labels: Vec<u64> = labels.clone();
+        let mut unique_label_set = HashSet::new();
+        unique_labels.retain(|e| unique_label_set.insert(*e));
+
+        for label in unique_labels.into_iter() {
+            let (filename, minishard_number) = self.compute_shard_location(label);
+            let label_list = to_labels.entry((filename.clone(), minishard_number)).or_insert(Vec::new());
+            label_list.push(label);
+
+            let all_label_list = to_all_labels.entry(filename.clone()).or_insert(Vec::new());
+            all_label_list.push(label);
+
+            let filename_list = filename_to_minishard_num.entry(filename.clone()).or_insert(Vec::new());
+            filename_list.push(minishard_number);
+        }
+
+        let label_filenames = to_all_labels.keys().cloned().collect();
+        let indices = self.get_indices(&label_filenames, Some(path), progress);
+
+        let requests = indices.iter()
+            .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
+            .collect();
+        let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress);
+
+        let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
+        for (filename, file_minishards) in all_minishards.into_iter() {
+            let filepath = self.meta.join(vec![&path, &filename]).unwrap();
+            for (mini_no, msi) in file_minishards.into_iter() {
+                let labels = to_labels.get(&(filename.clone(), mini_no)).unwrap();
+
+                let msi_is_none = msi.is_none();
+                let msi_data = msi.unwrap_or(vec![]);
+
+                for label in labels.iter() {
+                    if msi_is_none {
+                        results.insert(*label, None);
+                        continue;
+                    }
+
+                    // Get numerical indices of rows where the first column (index label) matches
+                    // the query label. In Python: np.where(msi[:,0] == label)[0]
+                    let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
+                        .map(|i| i.clone()).collect();
+                    if idx.len() == 0 {
+                        results.insert(*label, None);
+                    } else {
+                        if return_byte_range.unwrap_or(false) {
+                            // Get minishard index number at the found location
+                            // In Python: msi[idx,:][0]
+                            let (_, offset, size) = idx[0];
+                            results.insert(*label, Some((filepath.clone(), offset, size)));
+                        } else {
+                            results.insert(*label, Some((filepath.clone(), 0, 0)));
+                        }
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /*
+    def compute_shard_location(self, label):
+        shard_loc = self.spec.compute_shard_location(label)
+        filename = str(shard_loc.shard_number) + '.shard'
+        return (filename, shard_loc.minishard_number)
+    */
+    /// Returns (filename, shard_number) for meshes and skeletons.
+    /// Images require a different scheme.
+    pub fn compute_shard_location(&self, label: u64) -> (String, u64) {
+        let shard_loc = self.spec.compute_shard_location(label);
+        let shard_num = shard_loc.shard_number;
+        let filename = format!("{shard_num}.shard");
+
+        (filename, shard_loc.minishard_number.clone())
+    }
+
+    /*
+    def get_indices(self, filenames, path="", progress=None):
+        filenames = toiter(filenames)
+        filenames = [ self.meta.join(path, fname) for fname in filenames ]
+        fufilled = { fname: self.shard_index_cache[fname] \
+                    for fname in filenames \
+                    if fname in self.shard_index_cache }
+
+        requests = []
+        for fname in filenames:
+            if fname in fufilled:
+                continue
+            requests.append({
+                'path': fname,
+                'local_alias': fname + '.index',
+                'start': 0,
+                'end': self.spec.index_length(),
+            })
+
+        progress = 'Shard Indices' if progress else False
+        binaries = self.cache.download_as(requests, progress=progress)
+        for (fname, start, end), content in binaries.items():
+            try:
+                index = self.decode_index(content, fname)
+                self.shard_index_cache[fname] = index
+                fufilled[fname] = index
+            except EmptyFileException:
+                self.shard_index_cache[fname] = None
+                fufilled[fname] = None
+
+        return fufilled
+    */
+
+    /// For all given files, retrieves the shard index which
+    /// is used for locating the appropriate minishard indices.
+
+    /// Returns: {
+    /// path_to_/filename.shard: 2^minishard_bits entries of a uint64
+    ///         array of [[ byte start, byte end ], ... ],
+    /// ...
+    /// }
+    pub fn get_indices(&mut self, filenames: &Vec<String>, path: Option<&str>, progress: Option<bool>) -> HashMap<String, Option<Vec<(u64, u64)>>> {
+        let _path = path.unwrap_or("");
+        let _progress = progress.unwrap_or(false);
+
+        let full_paths: Vec<String> = filenames.iter()
+            .map(|f| self.meta.join(vec![_path, f]).unwrap())
+            .map(|f| f.to_string()).collect();
+        let mut fulfilled: HashMap<String, Option<Vec<(u64, u64)>>> = full_paths.iter()
+            .filter_map(|f| Some((f.clone(), self.shard_index_cache.get(f).unwrap().clone())))
+            .collect();
+
+        let mut requests = Vec::new();
+        for fname in full_paths.iter() {
+            if fulfilled.contains_key(fname) {
+                continue;
+            }
+            requests.push(IndexFileDetails {
+                path: fname.to_string(),
+                local_alias: format!("{fname}.index"),
+                start: 0,
+                end: self.spec.index_length(),
+            });
+        }
+
+        let binaries = self.cache.download_as(requests, Some(_progress));
+        for ((fname, b, c), content) in binaries.iter() {
+            let index = self.decode_index(content, Some(fname.clone()));
+            if index.is_ok() {
+                let unwrapped_index = index.unwrap();
+                self.shard_index_cache.put(fname.clone(), Some(unwrapped_index.clone()));
+                fulfilled.insert(fname.clone(), Some(unwrapped_index));
+            } else {
+                self.shard_index_cache.put(fname.clone(), None);
+                fulfilled.insert(fname.clone(), None);
+            }
+        }
+
+        fulfilled
+    }
+
+    /*
+    def decode_index(self, binary, filename='Shard'):
+        if binary is None or len(binary) == 0:
+        raise EmptyFileException(filename + " was zero bytes.")
+        elif len(binary) != self.spec.index_length():
+        raise SpecViolation(
+            filename + ": shard index was an incorrect length ({}) for this specification ({}).".format(
+            len(binary), self.spec.index_length()
+            ))
+
+        index = np.frombuffer(binary, dtype=np.uint64)
+        index = index.reshape( (index.size // 2, 2), order='C' )
+        return index + self.spec.index_length()
+    */
+    pub fn decode_index(&self, binary: &Vec<u8>, filename: Option<String>) -> Result<Vec<(u64, u64)>, Error> {
+        let normalized_filename = filename.unwrap_or("Shard".to_string());
+
+        let bin_len: u64 = binary.len().try_into().unwrap();
+        if bin_len == 0 {
+            return Err(Error::new( ErrorKind::InvalidInput, format!("{normalized_filename} was zero bytes.")));
+        }
+
+        let spec_len: u64 = self.spec.index_length();
+        if bin_len != spec_len {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("{normalized_filename}: shard index was an incorrect length ({bin_len}) for this specification ({spec_len}).")));
+        }
+
+        let mut index: Vec<u64> = vec![0; usize::try_from(spec_len.div_floor(8)).unwrap()]; // 64 / 8 = 8
+        u8_to_u64_array(&binary, &mut index);
+
+        let mut decoded_index: Vec<(u64, u64)> = Vec::new();
+        for i in 0..(index.len().div_floor(2)) {
+            decoded_index.push((
+                index[2*i] + spec_len,
+                index[2*i + 1] + spec_len
+            ))
+        }
+
+        Ok(decoded_index)
+    }
+
+    /*
+    def get_minishard_indices_for_files(self, requests, path="", progress=None):
+        fufilled_by_filename = defaultdict(dict)
+        msn_map = {}
+
+        download_requests = []
+        for filename, index, minishard_nos in requests:
+            fufilled_requests, pending_requests = self.compute_minishard_index_requests(
+                filename, index, minishard_nos, path
+            )
+            fufilled_by_filename[filename] = fufilled_requests
+            for msn, start, end in pending_requests:
+                msn_map[(basename(filename), start, end)] = msn
+
+                filepath = self.meta.join(path, filename)
+
+                download_requests.append({
+                    'path': filepath,
+                    'local_alias': '{}-{}.msi'.format(filepath, msn),
+                    'start': start,
+                    'end': end,
+                })
+
+        progress = 'Minishard Indices' if progress else False
+        results = self.cache.download_as(download_requests, progress=progress)
+
+        for (filename, start, end), content in results.items():
+            filename = basename(filename)
+            cache_key = (filename, start, end)
+            msn = msn_map[cache_key]
+            minishard_index = self.decode_minishard_index(content, filename)
+            self.minishard_index_cache[cache_key] = minishard_index
+            fufilled_by_filename[filename][msn] = minishard_index
+
+        return fufilled_by_filename
+    */
+    /// Fetches the specified minishard indices for all the specified files
+    /// at once. This is required to get high performance as opposed to fetching
+    /// the all minishard indices for a single file.
+
+    /// requests: iterable of tuples
+    /// [  (filename, index, minishard_numbers), ... ]
+
+    /// Returns: map of filename -> minishard numbers -> minishard indices
+
+    /// e.g.
+    /// {
+    /// filename_1: {
+    ///     0: uint64 Nx3 array of [segid, byte start, byte end],
+    ///     1: ...,
+    /// }
+    /// filename_2: ...
+    /// }
+    pub fn get_minishard_indices_for_files(&mut self, requests: &Vec<(String, &Option<Vec<(u64, u64)>>, Vec<u64>)>, path: Option<&str>,
+            progress: Option<bool>) -> HashMap<String, HashMap<u64, Option<Vec<(u64, u64, u64)>>>> {
+
+        let normalized_path = path.unwrap_or("");
+        let mut fulfilled_by_filename: HashMap<String, HashMap<u64, Option<Vec<(u64, u64, u64)>>>> = HashMap::new();
+        let mut msn_map: HashMap<(String, u64, u64), u64> = HashMap::new();
+
+        let mut download_requests: Vec<IndexFileDetails> = Vec::new();
+        for (filename, &ref index, minishard_nos) in requests {
+            let (fulfilled_requests, pending_requests) = self.compute_minishard_index_requests(
+                filename.clone(), &index, &minishard_nos, path);
+            fulfilled_by_filename.insert(filename.to_string(), fulfilled_requests);
+            for (msn, start, end) in pending_requests {
+                msn_map.insert((basename(filename), start, end), msn);
+                let filepath = self.meta.join(vec![normalized_path, filename]).unwrap();
+                download_requests.push(IndexFileDetails {
+                    path: filepath.clone(),
+                    local_alias: format!("{filepath}-{msn}.msi"),
+                    start: start,
+                    end: end,
+                });
+            }
+        }
+
+        let results = self.cache.download_as(download_requests, progress);
+        for ((full_filename, start, end), content) in results.into_iter() {
+            let filename = basename(&full_filename);
+            let cache_key = (filename.clone(), start, end);
+            let msn = msn_map.get(&cache_key).unwrap();
+            let minishard_index = self.decode_minishard_index(&content, &Some(filename.clone()));
+            self.minishard_index_cache.put(cache_key, Some(minishard_index.clone()));
+
+            fulfilled_by_filename.get_mut(&filename).unwrap()
+                .insert(*msn, Some(minishard_index));
+        }
+
+        fulfilled_by_filename
+    }
+
+    /*
+    def compute_minishard_index_requests(self, filename, index, minishard_nos, path=""):
+        minishard_nos = toiter(minishard_nos)
+
+        if index is None:
+            return ({ msn: None for msn in minishard_nos }, [])
+
+        fufilled_requests = {}
+
+        byte_ranges = {}
+        for msn in minishard_nos:
+            bytes_start, bytes_end = index[msn]
+
+            # most typically: [0,0] for an incomplete shard
+            if bytes_start == bytes_end:
+                fufilled_requests[msn] = None
+                continue
+
+            bytes_start, bytes_end = int(bytes_start), int(bytes_end)
+            byte_ranges[msn] = (bytes_start, bytes_end)
+
+        full_path = self.meta.join(self.meta.cloudpath, path)
+
+        pending_requests = []
+        for msn, (bytes_start, bytes_end) in byte_ranges.items():
+            cache_key = (filename, bytes_start, bytes_end)
+            if cache_key in self.minishard_index_cache:
+                fufilled_requests[msn] = self.minishard_index_cache[cache_key]
+            else:
+                pending_requests.append((msn, bytes_start, bytes_end))
+
+        return (fufilled_requests, pending_requests)
+    */
+    /// Helper method for get_minishard_indices_for_files.
+    /// Computes which requests must be made over the network vs can be fufilled from LRU cache.
+    pub fn compute_minishard_index_requests(&mut self, filename: String, index: &Option<Vec<(u64, u64)>>,
+            minishard_nos: &Vec<u64>, path: Option<&str>)
+            -> (HashMap<u64, Option<Vec<(u64, u64, u64)>>>, Vec<(u64, u64, u64)>) {
+
+        let mut fulfilled_requests: HashMap<u64, Option<Vec<(u64, u64, u64)>>> = HashMap::new();
+
+        if index.is_none() {
+            for msn in minishard_nos.iter() {
+                fulfilled_requests.insert(*msn, None);
+            }
+            return (fulfilled_requests, Vec::new())
+        }
+
+        let actual_index = index.as_ref().unwrap();
+
+        let mut byte_ranges: HashMap<u64, (u64, u64)> = HashMap::new();
+        for msn_ref in minishard_nos.iter() {
+            let msn = *msn_ref;
+            // FIXME: Can the cast be avoided?
+            let (bytes_start, bytes_end) = actual_index[msn as usize];
+
+            // Most typically: [0,0] for an incomplete shard
+            if bytes_start == bytes_end {
+                fulfilled_requests.insert(msn, None);
+                continue;
+            }
+
+            let (bytes_start_int, bytes_end_int) = (bytes_start, bytes_end);
+            byte_ranges.insert(msn, (bytes_start_int, bytes_end_int));
+        }
+
+        let full_path = self.meta.join(vec![&self.meta.cloudpath, path.unwrap_or("")]);
+
+        let mut pending_requests: Vec<(u64, u64, u64)> = Vec::new();
+        for (msn, (bytes_start, bytes_end)) in byte_ranges.into_iter() {
+            let cache_key = (filename.clone(), bytes_start, bytes_end);
+            if self.minishard_index_cache.contains(&cache_key) {
+                fulfilled_requests.insert(msn, self.minishard_index_cache.get(&cache_key).unwrap().clone());
+            } else {
+                pending_requests.push((msn, bytes_start, bytes_end));
+            }
+        }
+
+        (fulfilled_requests, pending_requests)
+    }
+
+    /*
+     def decode_minishard_index(self, minishard_index, filename=''):
+        if self.spec.minishard_index_encoding != 'raw':
+            minishard_index = compression.decompress(
+                minishard_index, encoding=self.spec.minishard_index_encoding, filename=filename
+            )
+
+        minishard_index = np.copy(np.frombuffer(minishard_index, dtype=np.uint64))
+        minishard_index = minishard_index.reshape( (3, len(minishard_index) // 3), order='C' ).T
+
+        minishard_index[:,0] = np.cumsum(minishard_index[:,0])
+        minishard_index[:,1] = np.cumsum(minishard_index[:,1])
+        minishard_index[1:,1] += np.cumsum(minishard_index[:-1,2])
+        minishard_index[:,1] += self.spec.index_length()
+
+        return minishard_index
+    */
+    /// Returns [[label, offset, size], ... ] where offset and size are in bytes.
+    pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, filename: &Option<String>)
+            -> Vec<(u64, u64, u64)> {
+
+        let mut decompressed: Vec<u8> = Vec::new();
+        let minishard_index = if self.spec.minishard_index_encoding == MinishardIndexEncoding::Raw {
+                minishard_index_bytes
+            } else {
+                if self.spec.minishard_index_encoding != MinishardIndexEncoding::Gzip {
+                    unimplemented!();
+                }
+                let mut gz = GzDecoder::new(&minishard_index_bytes[..]);
+                let result = gz.read_to_end(&mut decompressed);
+                &decompressed
+            };
+
+        let mut index: Vec<u64> = vec![0; usize::try_from(
+            minishard_index.len().div_floor(8)).unwrap()]; // buffer length / 8 = 8
+        u8_to_u64_array(&minishard_index, &mut index);
+
+        let mut decoded_minishard_index: Vec<(u64, u64, u64)> = Vec::new();
+        for i in 0..(minishard_index.len().div_floor(3)) {
+            decoded_minishard_index.push((
+                    index[i],
+                    index[i+1],
+                    index[i+2]))
+        }
+
+        let mut label_cumsum = 0;
+        let mut offset_cumsum = 0;
+        for (i, idx) in decoded_minishard_index.iter_mut().enumerate() {
+            label_cumsum += idx.0;
+            offset_cumsum += idx.1;
+            idx.0 = label_cumsum;
+            idx.1 = offset_cumsum;
+        }
+
+        let mut size_cumsum = 0;
+        for i in 1..decoded_minishard_index.len() {
+            size_cumsum += decoded_minishard_index[i-1].2;
+            decoded_minishard_index[i].1 += size_cumsum;
+        }
+
+        let spec_len = self.spec.index_length();
+        for i in 0..decoded_minishard_index.len() {
+            decoded_minishard_index[i].1 += spec_len;
+        }
+
+        decoded_minishard_index
+    }
+}
+
 
 // TODO: needed because cannot invoke type parameterized static trait methods
 // directly from trait name in Rust. Symptom of design problems with
