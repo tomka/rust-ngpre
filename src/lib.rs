@@ -18,20 +18,25 @@ doc_comment::doctest!("../README.md");
 #[macro_use]
 pub extern crate smallvec;
 
+use core::fmt::Debug;
+
 use std::convert::TryInto;
 use std::convert::TryFrom;
+use std::fmt;
 use std::ops::Div;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::{
     Error,
     ErrorKind,
+    Read,
 };
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::time::SystemTime;
 use std::path::Path;
 use std::path::PathBuf;
+use std::ops::Range;
 
 use byteorder::{
     LittleEndian,
@@ -68,6 +73,8 @@ pub mod prelude;
 pub(crate) mod tests;
 
 pub use semver::Version;
+
+use itertools::Itertools;
 
 
 const COORD_SMALLVEC_SIZE: usize = 6;
@@ -168,8 +175,34 @@ pub struct ShardLocation {
     pub remainder: u64,
 }
 
+fn OffsetCoordDefault() -> OffsetCoord {
+    OffsetCoord::from_vec(vec![0, 0, 0])
+}
+
 // See: https://github.com/google/neuroglancer/blob/master/src/datasource/precomputed/sharded.md#sharding-specification
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ShardingSpecificationData {
+    #[serde(rename = "@type")]
+    pub sharding_type: Option<ShardingType>,
+    pub preshift_bits: u64,
+    pub hash: ShardingHashType,
+    pub minishard_bits: u64,
+    pub shard_bits: u64,
+
+    #[serde(default = "MinishardIndexEncoding::default")]
+    pub minishard_index_encoding: MinishardIndexEncoding,
+
+    #[serde(default = "ShardingChunkDataEncoding::default")]
+    pub data_encoding: ShardingChunkDataEncoding,
+
+    #[serde(skip)]
+    pub minishard_mask: u64,
+    #[serde(skip)]
+    pub shard_mask: u64,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(from="ShardingSpecificationData")]
 pub struct ShardingSpecification {
     #[serde(rename = "@type")]
     pub sharding_type: Option<ShardingType>,
@@ -184,8 +217,26 @@ pub struct ShardingSpecification {
     #[serde(default = "ShardingChunkDataEncoding::default")]
     pub data_encoding: ShardingChunkDataEncoding,
 
+    #[serde(skip)]
     pub minishard_mask: u64,
+    #[serde(skip)]
     pub shard_mask: u64,
+}
+
+// This is needed, because we want to ensure shard masks are computed once the
+// data is loaded. The constructor isn't called directly unfortunately by SerDe.
+impl From<ShardingSpecificationData> for ShardingSpecification {
+    fn from(data: ShardingSpecificationData) -> Self {
+        ShardingSpecification::new(
+            data.sharding_type,
+            data.preshift_bits,
+            data.hash,
+            data.minishard_bits,
+            data.shard_bits,
+            data.minishard_index_encoding,
+            data.data_encoding,
+        )
+    }
 }
 
 impl ShardingSpecification {
@@ -210,7 +261,6 @@ impl ShardingSpecification {
             minishard_mask: 0,
             shard_mask: 0,
         };
-
         spec.compute_masks();
 
         spec
@@ -236,7 +286,18 @@ impl ShardingSpecification {
         return uint64(minishard_mask)
     */
     pub fn compute_minishard_mask(&self, val: u64) -> u64 {
-        0
+        if val < 0 {
+            panic!("must be greater or equal to zero");
+        } else if val == 0 {
+            return 0;
+        }
+
+        let mut minishard_mask: u64 = 1;
+        for i in 0..(val - 1) {
+            minishard_mask = minishard_mask << (1 as u64);
+            minishard_mask = minishard_mask | (1 as u64);
+        }
+        minishard_mask
     }
 
      /*
@@ -248,12 +309,16 @@ impl ShardingSpecification {
          return shard_mask & (~minishard_mask)j
     */
     pub fn compute_shard_mask(&self, shard_bits: u64, minishard_bits: u64) -> u64 {
-        0
+        let ones64 = 0xffffffffffffffff as u64;
+        let movement = (minishard_bits + shard_bits) as u64;
+        let shard_mask = !((ones64 >> movement) << movement);
+        let minishard_mask = self.compute_minishard_mask(minishard_bits);
+        shard_mask & (!minishard_mask)
     }
 
 
     pub fn index_length(&self) -> u64 {
-        (2 ** &self.minishard_bits) * 16
+        (2_u32.pow(self.minishard_bits as u32) * 16) as u64
     }
 
     pub fn hashfn(&self, val: u64) -> u64 {
@@ -269,26 +334,15 @@ impl ShardingSpecification {
         val as u64
     }
 
-    /*
-    def compute_shard_location(self, key):
-        chunkid = uint64(key) >> uint64(self.preshift_bits)
-        chunkid = self.hashfn(chunkid)
-        minishard_number = uint64(chunkid & self.minishard_mask)
-        shard_number = uint64((chunkid & self.shard_mask) >> uint64(self.minishard_bits))
-        shard_number = format(shard_number, 'x').zfill(int(np.ceil(self.shard_bits / 4.0)))
-        remainder = chunkid >> uint64(self.minishard_bits + self.shard_bits)
-
-        return ShardLocation(shard_number, minishard_number, remainder)
-    */
     pub fn compute_shard_location(&self, key:u64) -> ShardLocation {
         let shifted_chunkid = key >> self.preshift_bits;
         let chunkid = self.hashfn(shifted_chunkid);
-        let minishard_number = (key & self.minishard_mask) as u64;
-        let shard_number = ((chunkid & self.shard_mask) as u64 >> self.minishard_bits) as u64;
+        let minishard_number = chunkid & self.minishard_mask;
+        let shard_number = ((chunkid & self.shard_mask) >> self.minishard_bits) as u64;
         // Lower case hex formatting of shard_number and zfill with zeros for a total length of a
         // quarter of the shard_bits.
         let width = self.shard_bits.div_ceil(4) as usize;
-        let normalized_shard_number = format!("{:01$x}!", shard_number, width);
+        let normalized_shard_number = format!("{:01$x}", shard_number, width);
 
         let remainder = chunkid >> ((self.minishard_bits + self.shard_bits) as u64);
 
@@ -328,7 +382,7 @@ pub struct ScaleEntry {
     // Optional. If specified, must be a 3-element array [x, y, z] of integer values specifying a
     // translation in voxels of the origin of the data relative to the global coordinate frame. If
     // not specified, defaults to [0, 0, 0].
-    #[serde(default = "OffsetCoord::default")]
+    #[serde(default = "OffsetCoordDefault")]
     pub voxel_offset: OffsetCoord,
 
     // If specified, indicates that volumetric chunk data is stored using the sharded format. Must
@@ -623,13 +677,14 @@ impl DatasetAttributes {
 
     pub fn bounds(&self, zoom_level: usize) -> BBox::<UnboundedGridCoord> {
         let offset = self.get_voxel_offset(zoom_level).iter().cloned();
-        BBox::from_vec(vec![
-            offset.collect(),
-            self.get_dimensions(zoom_level).iter()
+
+        let mut bbox = BBox::new();
+        bbox.push(offset.collect());
+        bbox.push(self.get_dimensions(zoom_level).iter()
                 .zip(self.get_voxel_offset(zoom_level).iter().cloned())
                 .map(|(d, o)| o.checked_add_unsigned(*d).unwrap())
-                .collect()
-        ])
+                .collect());
+        bbox
     }
 
     /// Get the total number of blocks.
@@ -973,9 +1028,33 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T
     }
 }
 
+/*
+def gridpoints(bbox, volume_bbox, chunk_size):
+  chunk_size = Vec(*chunk_size)
+
+  grid_size = np.ceil(volume_bbox.size3() / chunk_size).astype(np.int64)
+  cutout_grid_size = np.ceil(bbox.size3() / chunk_size).astype(np.int64)
+  cutout_grid_offset = np.ceil((bbox.minpt - volume_bbox.minpt) / chunk_size).astype(np.int64)
+
+  grid_cutout = Bbox( cutout_grid_offset, cutout_grid_offset + cutout_grid_size )
+
+  for x,y,z in xyzrange( grid_cutout.minpt, grid_cutout.maxpt, (1,1,1) ):
+    yield Vec(x,y,z)
+*/
+/// Consider a volume as divided into a grid with the
+/// first chunk labeled 1, the second 2, etc.
+///
+/// Return the grid x,y,z coordinates of a cutout as a
+/// sequence.
+pub fn gridpoints(bbox: BBox<GridCoord>, volume_bbox: BBox<GridCoord>, chunk_size: ChunkSize) -> Vec<(u64, u64, u64)> {
+
+	Vec::new()
+}
+
 // gridpt: a list of 3d index locations in the grid of chunks (e.g. [(1,1,1)]
 // grid_size:
-pub fn compressed_morton_code(gridpt: &Vec<Vec<u64>>, grid_size: &Vec<u64>) -> Result<Vec<u64>, Error> {
+pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> Result<Vec<u64>, Error> {
+
     // Check if the input is empty
     if gridpt.is_empty() {
         return Ok(vec![]);
@@ -1030,9 +1109,15 @@ pub fn basename(path: &String) -> String {
     upath.to_string()
 }
 
+#[derive(Clone, Debug)]
+pub struct DataLocationDetails {
+	local: Vec<String>,
+	remote: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct PrecomputedMetadata {
-    cloudpath: String,
+    pub cloudpath: String,
 }
 
 impl PrecomputedMetadata {
@@ -1060,11 +1145,38 @@ impl PrecomputedMetadata {
 }
 
 #[derive(Clone, Debug)]
-pub struct CacheService {
-
+pub struct DataLoaderResult {
+    path: String,
+    byterange: Range<u64>,
+    content: Vec<u8>,
+    compress: String,
+    raw: bool,
 }
 
-impl CacheService {
+pub trait DataLoader {
+    fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
+        -> HashMap<String, Result<DataLoaderResult, Error>>;
+}
+
+impl<'a> Debug for (dyn DataLoader + 'a) {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DataLoader")
+    }
+}
+
+pub struct CacheService<'a> {
+	pub enabled: bool,
+	pub data_loader: &'a (dyn DataLoader),
+    pub meta: &'a PrecomputedMetadata,
+}
+
+impl<'a> fmt::Debug for CacheService<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "CacheService (enabled: {:?}", self.enabled)
+    }
+}
+
+impl<'a> CacheService<'a> {
 
     /*
     def download_as(self, requests, compress=None, progress=None):
@@ -1096,14 +1208,14 @@ impl CacheService {
 
         fragments = {}
         if self.enabled:
-        fragments = self.get(locs['local'], progress=progress)
-        keys = list(fragments.keys())
-        for key in keys:
-            return_key = (alias_to_path[key], alias_tuples[key][1], alias_tuples[key][2])
-            fragments[return_key] = fragments[key]
-            del fragments[key]
-        for alias in locs['local']:
-            del alias_tuples[alias]
+			fragments = self.get(locs['local'], progress=progress)
+			keys = list(fragments.keys())
+			for key in keys:
+				return_key = (alias_to_path[key], alias_tuples[key][1], alias_tuples[key][2])
+				fragments[return_key] = fragments[key]
+				del fragments[key]
+			for alias in locs['local']:
+				del alias_tuples[alias]
 
         remote_path_tuples = list(alias_tuples.values())
 
@@ -1142,11 +1254,81 @@ impl CacheService {
         fragments.update(remote_fragments)
         return fragments
     */
-    pub fn download_as(&self, requests: Vec<IndexFileDetails>, progess: Option<bool>)
+    pub fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>)
             -> HashMap::<(String, u64, u64), Vec<u8>> {
-        let results = HashMap::new();
 
-        results
+		if requests.len() == 0 {
+			return HashMap::new();
+		}
+
+		let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
+		let mut alias_tuples: HashMap<String, (String, u64, u64)> = requests.iter()
+			.map(|req| (req.local_alias.clone(), (req.path.clone(), req.start, req.end))).collect();
+		let alias_to_path: HashMap<String, String> = requests.iter()
+			.map(|req| (req.local_alias.clone(), req.path.clone())).collect();
+		let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
+			.map(|(k,v)| (v.clone(),k.clone())).collect();
+
+        console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
+        console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
+        console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
+
+		// Check for None-entries in alias_to_path?
+
+		let locs = self.compute_data_locations(&aliases);
+        console::log_1(&format!("download_as: locs: {:?}", locs).into());
+
+		let mut fragments: HashMap<(String, u64, u64), Vec<u8>> = HashMap::new();
+
+		if self.enabled {
+			let fragment_keys = self.get(&locs.local, progress);
+			for (key, result) in fragment_keys.into_iter() {
+				let return_key = (alias_to_path.get(&key).unwrap().clone(), alias_tuples.get(&key).unwrap().1,
+                    alias_tuples.get(&key).unwrap().2);
+				fragments.insert(return_key, result);
+			}
+			for alias in locs.local.iter() {
+				alias_tuples.remove(alias);
+			}
+		}
+
+		let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
+
+        /*
+		let request_tuples: HashMap<(String, u64, u64)> = remote_path_tuples.iter()
+			.map(|p| vec![("path", p[0]), ("start", p[1]), ("end", p[2])])
+			.collect();
+        */
+
+        let n_remote_path_tuples = remote_path_tuples.len();
+		let remote_fragments: HashMap<String, Result<DataLoaderResult, Error>> = self.data_loader.get(
+			self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples);
+
+		for (_path, frag) in remote_fragments.iter() {
+            match frag {
+                Err(why) => panic!("{:?}", why),
+                _ => (),
+            }
+		}
+
+		let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = remote_fragments.into_iter()
+			.map(|(_p, x)| match x {
+                Err(why) => panic!("{:?}", why),
+                Ok(res) => res,
+            })
+            .map(|x| ((x.path.clone(), x.byterange.start, x.byterange.end), x.content))
+			.collect();
+
+		if self.enabled {
+			// FIXME: Store in cache
+			// self.put()
+		}
+
+		for (key, content) in remote_fragments_bytes.iter() {
+			fragments.insert(key.clone(), content.clone());
+		}
+
+		fragments
     }
 
     /*
@@ -1160,8 +1342,59 @@ impl CacheService {
         )
         return cf.get(cloudpaths, return_dict=True)
     */
-    pub fn get(&self) -> u64 {
-        0
+    /// Get data from cache
+    pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, Vec<u8>> {
+        // FIXME
+        HashMap::new()
+    }
+
+    /*
+	def compute_data_locations(self, cloudpaths):
+		if not self.enabled:
+			return { 'local': [], 'remote': cloudpaths }
+
+		pathmodule = posixpath if self.meta.path.protocol != 'file' else os.path
+
+		def no_compression_ext(fnames):
+		results = []
+		for fname in fnames:
+			(name, ext) = pathmodule.splitext(fname)
+			if ext in COMPRESSION_EXTENSIONS:
+			results.append(name)
+			else:
+			results.append(fname)
+		return results
+
+		list_dirs = set([ pathmodule.dirname(pth) for pth in cloudpaths ])
+		filenames = []
+
+		for list_dir in list_dirs:
+		list_dir = os.path.join(self.path, list_dir)
+		filenames += no_compression_ext(os.listdir(mkdir(list_dir)))
+
+		basepathmap = { pathmodule.basename(path): pathmodule.dirname(path) for path in cloudpaths }
+
+		# check which files are already cached, we only want to download ones not in cache
+		requested = set([ pathmodule.basename(path) for path in cloudpaths ])
+		already_have = requested.intersection(set(filenames))
+		to_download = requested.difference(already_have)
+
+		download_paths = [ pathmodule.join(basepathmap[fname], fname) for fname in to_download ]
+		already_have = [ os.path.join(basepathmap[fname], fname) for fname in already_have ]
+
+		return { 'local': already_have, 'remote': download_paths }
+	*/
+    pub fn compute_data_locations(&self, cloudpaths: &Vec<String>) -> DataLocationDetails {
+
+		if !self.enabled {
+			return DataLocationDetails {
+				local: Vec::new(),
+				remote: cloudpaths.iter().cloned().collect(),
+			};
+		}
+
+		// FIXME
+		unimplemented!();
     }
 }
 
@@ -1207,15 +1440,17 @@ struct IndexFileDetails {
 }
 
 #[derive(Clone, Debug)]
-pub struct CloudFiles {
+pub struct CloudFiles<'a> {
     path: String,
     progress: bool,
     parallel: u32,
+	data_loader: &'a (dyn DataLoader),
 }
 
-impl CloudFiles {
-    pub fn new(path: String, progress: bool, parallel: u32) -> Self {
+impl<'a> CloudFiles<'a> {
+    pub fn new(data_loader: &'a (dyn DataLoader), path: String, progress: bool, parallel: u32) -> Self {
         Self {
+            data_loader,
             path,
             progress,
             parallel,
@@ -1223,14 +1458,34 @@ impl CloudFiles {
     }
 
     pub fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
-        vec![]
+        let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
+        let n_requet_bundles = request_bundles.len();
+        console::log_1(&format!("CloudFiles.get (num bundles: {:?})", n_requet_bundles).into());
+		let remote_fragments: HashMap<String, Result<DataLoaderResult, Error>> =
+            self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles);
+
+        remote_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
+            path: x.path,
+            byte_range_start: x.byterange.start,
+            byte_range_end: x.byterange.end,
+            error: None,
+            content: x.content,
+        }).collect()
+    }
+}
+
+impl<'a> fmt::Display for CloudFiles<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        //write!(f, "ShardReader ({}, {})", self.0, self.1)
+        write!(f, "CloudFiles (path: {:?})", self.path)
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ShardReader<'a> {
     meta: &'a PrecomputedMetadata,
-    cache: &'a CacheService,
+    cache: &'a CacheService<'a>,
+	data_loader: &'a (dyn DataLoader),
     spec: &'a ShardingSpecification,
     shard_index_cache: LruCache<String, Option<Vec<(u64, u64)>>>,
     minishard_index_cache: LruCache<(String, u64, u64), Option<Vec<(u64, u64, u64)>>>,
@@ -1241,6 +1496,7 @@ impl<'a> ShardReader<'a> {
         meta: &'a PrecomputedMetadata,
         cache: &'a CacheService,
         spec: &'a ShardingSpecification,
+	    data_loader: &'a (dyn DataLoader),
         shard_index_cache_size:Option<NonZeroUsize>,
         minishard_index_cache_size:Option<NonZeroUsize>,
     ) -> Self {
@@ -1249,6 +1505,7 @@ impl<'a> ShardReader<'a> {
             meta: meta,
             cache: cache,
             spec: spec,
+            data_loader: data_loader,
             shard_index_cache: LruCache::new(
                 shard_index_cache_size.unwrap_or(NonZeroUsize::new(512).unwrap())),
             minishard_index_cache: LruCache::new(
@@ -1388,6 +1645,7 @@ impl<'a> ShardReader<'a> {
         progress:Option<bool>, parallel:Option<u32>,
         raw:Option<bool>) -> Result<HashMap<u64, Option<Vec<u8>>>, Error>
     {
+        console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
         let _path = path.unwrap_or("");
         let _parallel = parallel.unwrap_or(1);
         let _raw = raw.unwrap_or(true);
@@ -1402,6 +1660,7 @@ impl<'a> ShardReader<'a> {
 
         // { label: [ filename, byte start, num_bytes ] }
         let mut exists = self.exists(labels, Some(_path), Some(true), progress);
+        console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
         let mut non_existing: Vec<u64> = Vec::new();
         for (k, v) in exists.iter() {
             if v.is_none() {
@@ -1412,6 +1671,7 @@ impl<'a> ShardReader<'a> {
             results.insert(*k, None);
             exists.remove(k);
         }
+        console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
 
         let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
         let mut files: Vec<ShardingFileRange> = Vec::new();
@@ -1427,7 +1687,8 @@ impl<'a> ShardReader<'a> {
                     end: _v.1.checked_add(_v.2).unwrap(),
                 });
         }
-
+        console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
+        console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
 
         // Requesting many individual shard chunks is slow, but due to z-ordering
         // we might be able to combine adjacent byte ranges. Especially helpful
@@ -1464,10 +1725,8 @@ impl<'a> ShardReader<'a> {
 
         let full_path = self.meta.join(vec![&self.meta.cloudpath, _path]).unwrap();
         let bundles_resp_list = CloudFiles::new(
-            full_path.to_string(), progress.unwrap_or(false), _parallel
-        ).get(&bundles); // FIXME
-                        //
-                        // Responses are not guaranteed to be in order of requests
+            self.data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
+        ).get(&bundles); // Responses are not guaranteed to be in order of requests
         let mut bundles_resp = HashMap::new();
         for r in bundles_resp_list.iter() {
             bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
@@ -1584,6 +1843,7 @@ impl<'a> ShardReader<'a> {
         let mut unique_labels: Vec<u64> = labels.clone();
         let mut unique_label_set = HashSet::new();
         unique_labels.retain(|e| unique_label_set.insert(*e));
+        console::log_1(&format!("exists: unique_label_set {}", unique_label_set.iter().format(", ")).into());
 
         for label in unique_labels.into_iter() {
             let (filename, minishard_number) = self.compute_shard_location(label);
@@ -1596,14 +1856,20 @@ impl<'a> ShardReader<'a> {
             let filename_list = filename_to_minishard_num.entry(filename.clone()).or_insert(Vec::new());
             filename_list.push(minishard_number);
         }
+        console::log_1(&format!("exists: to_labels {:?}", to_labels.iter().format(", ")).into());
+        console::log_1(&format!("exists: to_all_labels {:?}", to_all_labels.iter().format(", ")).into());
+        console::log_1(&format!("exists: filename_to_minishard_num {:?}", filename_to_minishard_num.iter().format(", ")).into());
 
         let label_filenames = to_all_labels.keys().cloned().collect();
         let indices = self.get_indices(&label_filenames, Some(path), progress);
+        console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
 
         let requests = indices.iter()
             .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
             .collect();
         let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress);
+
+        console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
 
         let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
         for (filename, file_minishards) in all_minishards.into_iter() {
@@ -1708,7 +1974,11 @@ impl<'a> ShardReader<'a> {
             .map(|f| self.meta.join(vec![_path, f]).unwrap())
             .map(|f| f.to_string()).collect();
         let mut fulfilled: HashMap<String, Option<Vec<(u64, u64)>>> = full_paths.iter()
-            .filter_map(|f| Some((f.clone(), self.shard_index_cache.get(f).unwrap().clone())))
+            .filter_map(|f| if self.shard_index_cache.contains(f) {
+                Some((f.clone(), self.shard_index_cache.get(f).unwrap().clone()))
+            } else {
+                None
+            })
             .collect();
 
         let mut requests = Vec::new();
@@ -1723,8 +1993,12 @@ impl<'a> ShardReader<'a> {
                 end: self.spec.index_length(),
             });
         }
+        console::log_1(&format!("get_indices: full_paths [{:?}]", full_paths.iter().format(", ")).into());
+        console::log_1(&format!("get_indices: fulfilled [{:?}]", fulfilled.iter().format(", ")).into());
+        console::log_1(&format!("get_indices: requests [{:?}]", requests.iter().format(", ")).into());
 
         let binaries = self.cache.download_as(requests, Some(_progress));
+        console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
         for ((fname, b, c), content) in binaries.iter() {
             let index = self.decode_index(content, Some(fname.clone()));
             if index.is_ok() {
@@ -2022,6 +2296,13 @@ impl<'a> ShardReader<'a> {
         }
 
         decoded_minishard_index
+    }
+}
+
+impl<'a> fmt::Display for ShardReader<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        //write!(f, "ShardReader ({}, {})", self.0, self.1)
+        write!(f, "ShardReader")
     }
 }
 
