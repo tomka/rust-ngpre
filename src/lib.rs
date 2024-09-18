@@ -58,6 +58,8 @@ use flate2::read::GzDecoder;
 use crate::compression::Compression;
 use crate::compression::gzip::GzipCompression;
 
+use web_sys::console;
+
 pub mod compression;
 #[macro_use]
 pub mod data_type;
@@ -75,6 +77,7 @@ pub(crate) mod tests;
 pub use semver::Version;
 
 use itertools::Itertools;
+use futures::future::{Future, err, ok};
 
 
 const COORD_SMALLVEC_SIZE: usize = 6;
@@ -1144,6 +1147,12 @@ impl PrecomputedMetadata {
 
 }
 
+fn path_join(paths: Vec<&str>) -> Option<String> {
+    let mut path = PathBuf::new();
+    path.extend(paths);
+    Some(path.to_str().unwrap().to_owned())
+}
+
 #[derive(Clone, Debug)]
 pub struct DataLoaderResult {
     path: String,
@@ -1155,7 +1164,7 @@ pub struct DataLoaderResult {
 
 pub trait DataLoader {
     fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
-        -> HashMap<String, Result<DataLoaderResult, Error>>;
+        -> Box<dyn Future<Item = HashMap<String, Result<DataLoaderResult, Error>>, Error = Error>>;
 }
 
 impl<'a> Debug for (dyn DataLoader + 'a) {
@@ -1166,7 +1175,7 @@ impl<'a> Debug for (dyn DataLoader + 'a) {
 
 pub struct CacheService<'a> {
 	pub enabled: bool,
-	pub data_loader: &'a (dyn DataLoader),
+	pub data_loader: &'a dyn DataLoader,
     pub meta: &'a PrecomputedMetadata,
 }
 
@@ -1255,10 +1264,10 @@ impl<'a> CacheService<'a> {
         return fragments
     */
     pub fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>)
-            -> HashMap::<(String, u64, u64), Vec<u8>> {
+            -> Box<dyn Future<Item = HashMap::<(String, u64, u64), Vec<u8>>, Error = Error> + '_> {
 
 		if requests.len() == 0 {
-			return HashMap::new();
+			return Box::new(ok(HashMap::new()));
 		}
 
 		let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
@@ -1301,34 +1310,39 @@ impl<'a> CacheService<'a> {
         */
 
         let n_remote_path_tuples = remote_path_tuples.len();
-		let remote_fragments: HashMap<String, Result<DataLoaderResult, Error>> = self.data_loader.get(
-			self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples);
 
-		for (_path, frag) in remote_fragments.iter() {
-            match frag {
-                Err(why) => panic!("{:?}", why),
-                _ => (),
+        // Get a Future that retrieves the data
+		let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples);
+        // Avoid requiring to move self into closure
+        let is_enabled = self.enabled;
+
+        Box::new(load_fragments.and_then(move |remote_fragments| {
+            for (_path, frag) in remote_fragments.iter() {
+                match frag {
+                    Err(why) => panic!("{:?}", why),
+                    _ => (),
+                }
             }
-		}
 
-		let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = remote_fragments.into_iter()
-			.map(|(_p, x)| match x {
-                Err(why) => panic!("{:?}", why),
-                Ok(res) => res,
-            })
-            .map(|x| ((x.path.clone(), x.byterange.start, x.byterange.end), x.content))
-			.collect();
+            let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = remote_fragments.into_iter()
+                .map(|(_p, x)| match x {
+                    Err(why) => panic!("{:?}", why),
+                    Ok(res) => res,
+                })
+                .map(|x| ((x.path.clone(), x.byterange.start, x.byterange.end), x.content))
+                .collect();
 
-		if self.enabled {
-			// FIXME: Store in cache
-			// self.put()
-		}
+            if is_enabled {
+                // FIXME: Store in cache
+                // self.put()
+            }
 
-		for (key, content) in remote_fragments_bytes.iter() {
-			fragments.insert(key.clone(), content.clone());
-		}
+            for (key, content) in remote_fragments_bytes.iter() {
+                fragments.insert(key.clone(), content.clone());
+            }
 
-		fragments
+            ok(fragments)
+        }))
     }
 
     /*
@@ -1457,20 +1471,21 @@ impl<'a> CloudFiles<'a> {
         }
     }
 
-    pub fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
+    pub fn get(&self, target: &Vec<ShardingBundle>) -> Box<dyn Future<Item = Vec<BundleDetails>, Error = Error>> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
         let n_requet_bundles = request_bundles.len();
         console::log_1(&format!("CloudFiles.get (num bundles: {:?})", n_requet_bundles).into());
-		let remote_fragments: HashMap<String, Result<DataLoaderResult, Error>> =
-            self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles);
+		let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles);
 
-        remote_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
-            path: x.path,
-            byte_range_start: x.byterange.start,
-            byte_range_end: x.byterange.end,
-            error: None,
-            content: x.content,
-        }).collect()
+        Box::new(load_fragments.and_then(|remote_fragments| {
+            ok(remote_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
+                path: x.path,
+                byte_range_start: x.byterange.start,
+                byte_range_end: x.byterange.end,
+                error: None,
+                content: x.content,
+            }).collect::<Vec<BundleDetails>>())
+        }))
     }
 }
 
@@ -1641,128 +1656,138 @@ impl<'a> ShardReader<'a> {
     ///
     /// Returns: map of label vs. bytestring
     ///
-    pub fn get_data(&mut self, labels: &Vec<u64>, path:Option<&str>,
-        progress:Option<bool>, parallel:Option<u32>,
-        raw:Option<bool>) -> Result<HashMap<u64, Option<Vec<u8>>>, Error>
+    pub fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
+        parallel:Option<u32>, raw:Option<bool>)
+        -> Box<dyn Future<Item = Result<HashMap<u64, Option<Vec<u8>>>, Error>, Error = Error> + '_>
     {
         console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
         let _path = path.unwrap_or("");
         let _parallel = parallel.unwrap_or(1);
-        let _raw = raw.unwrap_or(true);
+        let is_raw = raw.unwrap_or(true);
+
+        let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
 
         if labels.len() == 0 {
-            return Ok(HashMap::new())
+            return Box::new(ok(Ok(results)));
         }
 
         // TODO: Cache logic
 
-        let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+        // Is accessed by both closures below
+        let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
+        let mut bundles: Vec<ShardingBundle> = Vec::new();
+        let full_path = path_join(vec![&self.meta.cloudpath, _path]).unwrap();
+        let data_loader = self.data_loader;
 
         // { label: [ filename, byte start, num_bytes ] }
-        let mut exists = self.exists(labels, Some(_path), Some(true), progress);
-        console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
-        let mut non_existing: Vec<u64> = Vec::new();
-        for (k, v) in exists.iter() {
-            if v.is_none() {
-                non_existing.push(*k);
-            }
-        }
-        for k in non_existing.iter() {
-            results.insert(*k, None);
-            exists.remove(k);
-        }
-        console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
-
-        let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
-        let mut files: Vec<ShardingFileRange> = Vec::new();
-        for (k, v) in exists.iter() {
-            let _v = v.as_ref().unwrap();
-            let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
-            key_label.insert(
-                (upath.to_string(), _v.1, _v.2),
-                *k);
-            files.push(ShardingFileRange {
-                    path: upath.to_string(),
-                    start: _v.1,
-                    end: _v.1.checked_add(_v.2).unwrap(),
-                });
-        }
-        console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
-        console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
-
-        // Requesting many individual shard chunks is slow, but due to z-ordering
-        // we might be able to combine adjacent byte ranges. Especially helpful
-        // when downloading entire shards!
-        // TODO: implement sorting of files into bundles
-        let mut sorted_files = files.to_vec();
-        sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
-        let mut bundles: Vec<ShardingBundle> = Vec::new();
-        for chunk in sorted_files.iter_mut() {
-            if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
-                    || (chunk.start != bundles.last().unwrap().end)
-            {
-                bundles.push(ShardingBundle {
-                    content: None,
-                    subranges: vec![],
-                    path: chunk.path.clone(),
-                    start: chunk.start,
-                    end: chunk.end,
-                });
-            } else {
-                bundles.last_mut().unwrap().end = chunk.end;
-            }
-
-            let last_bundle_start = bundles.last_mut().unwrap().start;
-
-            bundles.last_mut().unwrap().subranges.push(
-                BundleSubrange {
-                    start: chunk.start,
-                    length: chunk.end - chunk.start,
-                    slice_start: (chunk.start - last_bundle_start) as usize,
-                    slice_end: (chunk.end - last_bundle_start) as usize,
-                })
-        }
-
-        let full_path = self.meta.join(vec![&self.meta.cloudpath, _path]).unwrap();
-        let bundles_resp_list = CloudFiles::new(
-            self.data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
-        ).get(&bundles); // Responses are not guaranteed to be in order of requests
-        let mut bundles_resp = HashMap::new();
-        for r in bundles_resp_list.iter() {
-            bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
-        }
-
-        let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
-        for bundle_req in bundles.iter() {
-            let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
-            if bundle_resp_item.is_none() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */))
-            } else {
-                let bundle_resp = bundle_resp_item.unwrap();
-                for chunk in bundle_req.subranges.iter() {
-                    let key = (bundle_req.path.clone(), chunk.start, chunk.length);
-                    let lbl = key_label.get(&key).unwrap();
-                    binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
+        let load_exists = self.exists(labels, Some(_path), Some(true), progress);
+        let assemble_data = load_exists.and_then(move |mut exists| {
+            console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
+            let mut non_existing: Vec<u64> = Vec::new();
+            for (k, v) in exists.iter() {
+                if v.is_none() {
+                    non_existing.push(*k);
                 }
             }
-        }
+            for k in non_existing.iter() {
+                results.insert(*k, None);
+                exists.remove(k);
+            }
+            console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
 
-        // TODO: Optional decode
-        if !_raw {
-            unimplemented!();
-        }
+            let mut files: Vec<ShardingFileRange> = Vec::new();
+            for (k, v) in exists.iter() {
+                let _v = v.as_ref().unwrap();
+                let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
+                key_label.insert(
+                    (upath.to_string(), _v.1, _v.2),
+                    *k);
+                files.push(ShardingFileRange {
+                        path: upath.to_string(),
+                        start: _v.1,
+                        end: _v.1.checked_add(_v.2).unwrap(),
+                    });
+            }
+            console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
+            console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
 
-        // TODO: Add data to caches, if enabled
-        // if self.cache.enabled:
-        //     self.cache.put([
-        //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
-        //     ], progress=_progress)
+            // Requesting many individual shard chunks is slow, but due to z-ordering
+            // we might be able to combine adjacent byte ranges. Especially helpful
+            // when downloading entire shards!
+            // TODO: implement sorting of files into bundles
+            let mut sorted_files = files.to_vec();
+            sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
+            for chunk in sorted_files.iter_mut() {
+                if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
+                        || (chunk.start != bundles.last().unwrap().end)
+                {
+                    bundles.push(ShardingBundle {
+                        content: None,
+                        subranges: vec![],
+                        path: chunk.path.clone(),
+                        start: chunk.start,
+                        end: chunk.end,
+                    });
+                } else {
+                    bundles.last_mut().unwrap().end = chunk.end;
+                }
 
-        // Copy binary collection into result set
-        results.extend(binaries);
+                let last_bundle_start = bundles.last_mut().unwrap().start;
 
-        Ok(results)
+                bundles.last_mut().unwrap().subranges.push(
+                    BundleSubrange {
+                        start: chunk.start,
+                        length: chunk.end - chunk.start,
+                        slice_start: (chunk.start - last_bundle_start) as usize,
+                        slice_end: (chunk.end - last_bundle_start) as usize,
+                    })
+            }
+
+            // Responses are not guaranteed to be in order of requests
+            CloudFiles::new(
+                data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
+            ).get(&bundles)
+            .map(move |bundles_resp_list| ((bundles, bundles_resp_list, key_label, results, is_raw)))
+        }).and_then(|(bundles, bundles_resp_list, key_label, mut results, is_raw)| {
+            let mut bundles_resp = HashMap::new();
+            for r in bundles_resp_list.iter() {
+                bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
+            }
+
+            let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+            for bundle_req in bundles.iter() {
+                let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
+                if bundle_resp_item.is_none() {
+                    return err(Error::new(
+                        ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */))
+                } else {
+                    let bundle_resp = bundle_resp_item.unwrap();
+                    for chunk in bundle_req.subranges.iter() {
+                        let key = (bundle_req.path.clone(), chunk.start, chunk.length);
+                        let lbl = key_label.get(&key).unwrap();
+                        binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
+                    }
+                }
+            }
+
+            // TODO: Optional decode
+            if !is_raw {
+                unimplemented!();
+            }
+
+            // TODO: Add data to cacheS, If enabled
+            // if self.cache.enabled:
+            //     self.cache.put([
+            //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
+            //     ], progress=_progress)
+
+            // Copy binary collection into result set
+            results.extend(binaries);
+
+            ok(Ok(results))
+        });
+
+        Box::new(assemble_data)
     }
 
     /*
@@ -1830,8 +1855,8 @@ impl<'a> ShardReader<'a> {
     ///     return OUTPUT
     /// Else:
     ///     return { label_1: OUTPUT, label_2: OUTPUT, ... }
-    pub fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&str>, return_byte_range: Option<bool>,
-            progress:Option<bool>) -> HashMap<u64, Option<(String, u64, u64)>> {
+    pub fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&'a str>, return_byte_range: Option<bool>,
+            progress:Option<bool>) -> Box<dyn Future<Item=HashMap<u64, Option<(String, u64, u64)>>, Error = Error> + '_> {
 
         let path = path_desc.unwrap_or("");
 
@@ -1861,52 +1886,55 @@ impl<'a> ShardReader<'a> {
         console::log_1(&format!("exists: filename_to_minishard_num {:?}", filename_to_minishard_num.iter().format(", ")).into());
 
         let label_filenames = to_all_labels.keys().cloned().collect();
-        let indices = self.get_indices(&label_filenames, Some(path), progress);
-        console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
+        let load_indices = self.get_indices(&label_filenames, Some(path), progress);
 
-        let requests = indices.iter()
-            .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
-            .collect();
-        let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress);
+        Box::new(load_indices.and_then(move |indices| {
+            console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
 
-        console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
+            let requests = indices.iter()
+                .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
+                .collect();
+            self.get_minishard_indices_for_files(&requests, Some(path), progress)
+        }).and_then(move |all_minishards| {
+            console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
 
-        let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
-        for (filename, file_minishards) in all_minishards.into_iter() {
-            let filepath = self.meta.join(vec![&path, &filename]).unwrap();
-            for (mini_no, msi) in file_minishards.into_iter() {
-                let labels = to_labels.get(&(filename.clone(), mini_no)).unwrap();
+            let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
+            for (filename, file_minishards) in all_minishards.into_iter() {
+                let filepath = path_join(vec![&path, &filename]).unwrap();
+                for (mini_no, msi) in file_minishards.into_iter() {
+                    let labels = to_labels.get(&(filename.clone(), mini_no)).unwrap();
 
-                let msi_is_none = msi.is_none();
-                let msi_data = msi.unwrap_or(vec![]);
+                    let msi_is_none = msi.is_none();
+                    let msi_data = msi.unwrap_or(vec![]);
 
-                for label in labels.iter() {
-                    if msi_is_none {
-                        results.insert(*label, None);
-                        continue;
-                    }
+                    for label in labels.iter() {
+                        if msi_is_none {
+                            results.insert(*label, None);
+                            continue;
+                        }
 
-                    // Get numerical indices of rows where the first column (index label) matches
-                    // the query label. In Python: np.where(msi[:,0] == label)[0]
-                    let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
-                        .map(|i| i.clone()).collect();
-                    if idx.len() == 0 {
-                        results.insert(*label, None);
-                    } else {
-                        if return_byte_range.unwrap_or(false) {
-                            // Get minishard index number at the found location
-                            // In Python: msi[idx,:][0]
-                            let (_, offset, size) = idx[0];
-                            results.insert(*label, Some((filepath.clone(), offset, size)));
+                        // Get numerical indices of rows where the first column (index label) matches
+                        // the query label. In Python: np.where(msi[:,0] == label)[0]
+                        let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
+                            .map(|i| i.clone()).collect();
+                        if idx.len() == 0 {
+                            results.insert(*label, None);
                         } else {
-                            results.insert(*label, Some((filepath.clone(), 0, 0)));
+                            if return_byte_range.unwrap_or(false) {
+                                // Get minishard index number at the found location
+                                // In Python: msi[idx,:][0]
+                                let (_, offset, size) = idx[0];
+                                results.insert(*label, Some((filepath.clone(), offset, size)));
+                            } else {
+                                results.insert(*label, Some((filepath.clone(), 0, 0)));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        results
+            ok(results)
+        }))
     }
 
     /*
@@ -1966,7 +1994,8 @@ impl<'a> ShardReader<'a> {
     ///         array of [[ byte start, byte end ], ... ],
     /// ...
     /// }
-    pub fn get_indices(&mut self, filenames: &Vec<String>, path: Option<&str>, progress: Option<bool>) -> HashMap<String, Option<Vec<(u64, u64)>>> {
+    pub fn get_indices(&mut self, filenames: &Vec<String>, path: Option<&str>, progress: Option<bool>)
+            -> Box<dyn Future<Item = HashMap<String, Option<Vec<(u64, u64)>>>, Error = Error> + '_> {
         let _path = path.unwrap_or("");
         let _progress = progress.unwrap_or(false);
 
@@ -1997,21 +2026,23 @@ impl<'a> ShardReader<'a> {
         console::log_1(&format!("get_indices: fulfilled [{:?}]", fulfilled.iter().format(", ")).into());
         console::log_1(&format!("get_indices: requests [{:?}]", requests.iter().format(", ")).into());
 
-        let binaries = self.cache.download_as(requests, Some(_progress));
-        console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
-        for ((fname, b, c), content) in binaries.iter() {
-            let index = self.decode_index(content, Some(fname.clone()));
-            if index.is_ok() {
-                let unwrapped_index = index.unwrap();
-                self.shard_index_cache.put(fname.clone(), Some(unwrapped_index.clone()));
-                fulfilled.insert(fname.clone(), Some(unwrapped_index));
-            } else {
-                self.shard_index_cache.put(fname.clone(), None);
-                fulfilled.insert(fname.clone(), None);
+        let load_binaries = self.cache.download_as(requests, Some(_progress));
+        Box::new(load_binaries.and_then(move |binaries| {
+            console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
+            for ((fname, b, c), content) in binaries.iter() {
+                let index = self.decode_index(content, Some(fname.clone()));
+                if index.is_ok() {
+                    let unwrapped_index = index.unwrap();
+                    self.shard_index_cache.put(fname.clone(), Some(unwrapped_index.clone()));
+                    fulfilled.insert(fname.clone(), Some(unwrapped_index));
+                } else {
+                    self.shard_index_cache.put(fname.clone(), None);
+                    fulfilled.insert(fname.clone(), None);
+                }
             }
-        }
 
-        fulfilled
+            ok(fulfilled)
+        }))
     }
 
     /*
@@ -2111,7 +2142,7 @@ impl<'a> ShardReader<'a> {
     /// filename_2: ...
     /// }
     pub fn get_minishard_indices_for_files(&mut self, requests: &Vec<(String, &Option<Vec<(u64, u64)>>, Vec<u64>)>, path: Option<&str>,
-            progress: Option<bool>) -> HashMap<String, HashMap<u64, Option<Vec<(u64, u64, u64)>>>> {
+            progress: Option<bool>) -> Box<dyn Future<Item = HashMap<String, HashMap<u64, Option<Vec<(u64, u64, u64)>>>>, Error = Error> + '_> {
 
         let normalized_path = path.unwrap_or("");
         let mut fulfilled_by_filename: HashMap<String, HashMap<u64, Option<Vec<(u64, u64, u64)>>>> = HashMap::new();
@@ -2134,19 +2165,24 @@ impl<'a> ShardReader<'a> {
             }
         }
 
-        let results = self.cache.download_as(download_requests, progress);
-        for ((full_filename, start, end), content) in results.into_iter() {
-            let filename = basename(&full_filename);
-            let cache_key = (filename.clone(), start, end);
-            let msn = msn_map.get(&cache_key).unwrap();
-            let minishard_index = self.decode_minishard_index(&content, &Some(filename.clone()));
-            self.minishard_index_cache.put(cache_key, Some(minishard_index.clone()));
+        let load_results = self.cache.download_as(download_requests, progress);
 
-            fulfilled_by_filename.get_mut(&filename).unwrap()
-                .insert(*msn, Some(minishard_index));
-        }
+        let parse_results = load_results.and_then(move |results| {
+            for ((full_filename, start, end), content) in results.into_iter() {
+                let filename = basename(&full_filename);
+                let cache_key = (filename.clone(), start, end);
+                let msn = msn_map.get(&cache_key).unwrap();
+                let minishard_index = self.decode_minishard_index(&content, &Some(filename.clone()));
+                self.minishard_index_cache.put(cache_key, Some(minishard_index.clone()));
 
-        fulfilled_by_filename
+                fulfilled_by_filename.get_mut(&filename).unwrap()
+                    .insert(*msn, Some(minishard_index));
+            }
+
+            ok(fulfilled_by_filename)
+        });
+
+        Box::new(parse_results)
     }
 
     /*
