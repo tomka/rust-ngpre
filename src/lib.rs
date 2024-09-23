@@ -1649,139 +1649,134 @@ impl<'a> ShardReader<'a> {
     ///
     /// Returns: map of label vs. bytestring
     ///
-    // pub fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
-    //     parallel:Option<u32>, raw:Option<bool>)
-    //     -> Box<dyn Future<Item = Result<HashMap<u64, Option<Vec<u8>>>, Error>, Error = Error> + '_>
-    // {
-    //     console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
-    //     let _path = path.unwrap_or("");
-    //     let _parallel = parallel.unwrap_or(1);
-    //     let is_raw = raw.unwrap_or(true);
-    //
-    //     let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
-    //
-    //     if labels.len() == 0 {
-    //         return Box::new(ok(Ok(results)));
-    //     }
-    //
-    //     // TODO: Cache logic
-    //
-    //     // Is accessed by both closures below
-    //     let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
-    //     let mut bundles: Vec<ShardingBundle> = Vec::new();
-    //     let full_path = path_join(vec![&self.meta.cloudpath, _path]).unwrap();
-    //     let data_loader = self.data_loader;
-    //
-    //     // { label: [ filename, byte start, num_bytes ] }
-    //     let load_exists = self.exists(labels, Some(_path), Some(true), progress);
-    //     let assemble_data = load_exists.and_then(move |mut exists| {
-    //         console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
-    //         let mut non_existing: Vec<u64> = Vec::new();
-    //         for (k, v) in exists.iter() {
-    //             if v.is_none() {
-    //                 non_existing.push(*k);
-    //             }
-    //         }
-    //         for k in non_existing.iter() {
-    //             results.insert(*k, None);
-    //             exists.remove(k);
-    //         }
-    //         console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
-    //
-    //         let mut files: Vec<ShardingFileRange> = Vec::new();
-    //         for (k, v) in exists.iter() {
-    //             let _v = v.as_ref().unwrap();
-    //             let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
-    //             key_label.insert(
-    //                 (upath.to_string(), _v.1, _v.2),
-    //                 *k);
-    //             files.push(ShardingFileRange {
-    //                     path: upath.to_string(),
-    //                     start: _v.1,
-    //                     end: _v.1.checked_add(_v.2).unwrap(),
-    //                 });
-    //         }
-    //         console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
-    //         console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
-    //
-    //         // Requesting many individual shard chunks is slow, but due to z-ordering
-    //         // we might be able to combine adjacent byte ranges. Especially helpful
-    //         // when downloading entire shards!
-    //         // TODO: implement sorting of files into bundles
-    //         let mut sorted_files = files.to_vec();
-    //         sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
-    //         for chunk in sorted_files.iter_mut() {
-    //             if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
-    //                     || (chunk.start != bundles.last().unwrap().end)
-    //             {
-    //                 bundles.push(ShardingBundle {
-    //                     content: None,
-    //                     subranges: vec![],
-    //                     path: chunk.path.clone(),
-    //                     start: chunk.start,
-    //                     end: chunk.end,
-    //                 });
-    //             } else {
-    //                 bundles.last_mut().unwrap().end = chunk.end;
-    //             }
-    //
-    //             let last_bundle_start = bundles.last_mut().unwrap().start;
-    //
-    //             bundles.last_mut().unwrap().subranges.push(
-    //                 BundleSubrange {
-    //                     start: chunk.start,
-    //                     length: chunk.end - chunk.start,
-    //                     slice_start: (chunk.start - last_bundle_start) as usize,
-    //                     slice_end: (chunk.end - last_bundle_start) as usize,
-    //                 })
-    //         }
-    //
-    //         // Responses are not guaranteed to be in order of requests
-    //         CloudFiles::new(
-    //             data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
-    //         ).get(&bundles)
-    //         .map(move |bundles_resp_list| ((bundles, bundles_resp_list, key_label, results, is_raw)))
-    //     }).and_then(|(bundles, bundles_resp_list, key_label, mut results, is_raw)| {
-    //         let mut bundles_resp = HashMap::new();
-    //         for r in bundles_resp_list.iter() {
-    //             bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
-    //         }
-    //
-    //         let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
-    //         for bundle_req in bundles.iter() {
-    //             let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
-    //             if bundle_resp_item.is_none() {
-    //                 return err(Error::new(
-    //                     ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */))
-    //             } else {
-    //                 let bundle_resp = bundle_resp_item.unwrap();
-    //                 for chunk in bundle_req.subranges.iter() {
-    //                     let key = (bundle_req.path.clone(), chunk.start, chunk.length);
-    //                     let lbl = key_label.get(&key).unwrap();
-    //                     binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
-    //                 }
-    //             }
-    //         }
-    //
-    //         // TODO: Optional decode
-    //         if !is_raw {
-    //             unimplemented!();
-    //         }
-    //
-    //         // TODO: Add data to cacheS, If enabled
-    //         // if self.cache.enabled:
-    //         //     self.cache.put([
-    //         //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
-    //         //     ], progress=_progress)
-    //
-    //         // Copy binary collection into result set
-    //         results.extend(binaries);
-    //
-    //         ok(Ok(results))
-    //     });
-    //
-    //     Box::new(assemble_data)
-    // }
+    pub async fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
+        parallel:Option<u32>, raw:Option<bool>) -> Result<HashMap<u64, Option<Vec<u8>>>, Error>
+    {
+        console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
+        let _path = path.unwrap_or("");
+        let _parallel = parallel.unwrap_or(1);
+        let is_raw = raw.unwrap_or(true);
+
+        let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+
+        if labels.len() == 0 {
+            return Ok(results);
+        }
+
+        // TODO: Cache logic
+
+        // Is accessed by both closures below
+        let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
+        let mut bundles: Vec<ShardingBundle> = Vec::new();
+        let full_path = path_join(vec![&self.meta.cloudpath, _path]).unwrap();
+        let data_loader = self.data_loader;
+
+        // { label: [ filename, byte start, num_bytes ] }
+        let mut exists = self.exists(labels, Some(_path), Some(true), progress).await;
+
+        console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
+        let mut non_existing: Vec<u64> = Vec::new();
+        for (k, v) in exists.iter() {
+            if v.is_none() {
+                non_existing.push(*k);
+            }
+        }
+        for k in non_existing.iter() {
+            results.insert(*k, None);
+            exists.remove(k);
+        }
+        console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
+
+        let mut files: Vec<ShardingFileRange> = Vec::new();
+        for (k, v) in exists.iter() {
+            let _v = v.as_ref().unwrap();
+            let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
+            key_label.insert(
+                (upath.to_string(), _v.1, _v.2),
+                *k);
+            files.push(ShardingFileRange {
+                    path: upath.to_string(),
+                    start: _v.1,
+                    end: _v.1.checked_add(_v.2).unwrap(),
+                });
+        }
+        console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
+        console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
+
+        // Requesting many individual shard chunks is slow, but due to z-ordering
+        // we might be able to combine adjacent byte ranges. Especially helpful
+        // when downloading entire shards!
+        // TODO: implement sorting of files into bundles
+        let mut sorted_files = files.to_vec();
+        sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
+        for chunk in sorted_files.iter_mut() {
+            if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
+                    || (chunk.start != bundles.last().unwrap().end)
+            {
+                bundles.push(ShardingBundle {
+                    content: None,
+                    subranges: vec![],
+                    path: chunk.path.clone(),
+                    start: chunk.start,
+                    end: chunk.end,
+                });
+            } else {
+                bundles.last_mut().unwrap().end = chunk.end;
+            }
+
+            let last_bundle_start = bundles.last_mut().unwrap().start;
+
+            bundles.last_mut().unwrap().subranges.push(
+                BundleSubrange {
+                    start: chunk.start,
+                    length: chunk.end - chunk.start,
+                    slice_start: (chunk.start - last_bundle_start) as usize,
+                    slice_end: (chunk.end - last_bundle_start) as usize,
+                })
+        }
+
+        // Responses are not guaranteed to be in order of requests
+        let bundles_resp_list = CloudFiles::new(
+            data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
+        ).get(&bundles).await;
+
+        let mut bundles_resp = HashMap::new();
+        for r in bundles_resp_list.iter() {
+            bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
+        }
+
+        let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+        for bundle_req in bundles.iter() {
+            let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
+            if bundle_resp_item.is_none() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */));
+            } else {
+                let bundle_resp = bundle_resp_item.unwrap();
+                for chunk in bundle_req.subranges.iter() {
+                    let key = (bundle_req.path.clone(), chunk.start, chunk.length);
+                    let lbl = key_label.get(&key).unwrap();
+                    binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
+                }
+            }
+        }
+
+        // TODO: Optional decode
+        if !is_raw {
+            unimplemented!();
+        }
+
+        // TODO: Add data to cacheS, If enabled
+        // if self.cache.enabled:
+        //     self.cache.put([
+        //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
+        //     ], progress=_progress)
+
+        // Copy binary collection into result set
+        results.extend(binaries);
+
+        Ok(results)
+    }
 
     /*
     def exists(self, labels, path="", return_byte_range=False, progress=None):
@@ -1848,87 +1843,84 @@ impl<'a> ShardReader<'a> {
     ///     return OUTPUT
     /// Else:
     ///     return { label_1: OUTPUT, label_2: OUTPUT, ... }
-    // pub fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&'a str>, return_byte_range: Option<bool>,
-    //         progress:Option<bool>) -> Box<dyn Future<Item=HashMap<u64, Option<(String, u64, u64)>>, Error = Error> + '_> {
-    //
-    //     let path = path_desc.unwrap_or("");
-    //
-    //     let mut to_labels: HashMap<(String, u64), Vec<u64>> = HashMap::new();
-    //     let mut to_all_labels: HashMap<String, Vec<u64>> = HashMap::new();
-    //     let mut filename_to_minishard_num: HashMap<String, Vec<u64>> = HashMap::new();
-    //
-    //
-    //     let mut unique_labels: Vec<u64> = labels.clone();
-    //     let mut unique_label_set = HashSet::new();
-    //     unique_labels.retain(|e| unique_label_set.insert(*e));
-    //     console::log_1(&format!("exists: unique_label_set {}", unique_label_set.iter().format(", ")).into());
-    //
-    //     for label in unique_labels.into_iter() {
-    //         let (filename, minishard_number) = self.compute_shard_location(label);
-    //         let label_list = to_labels.entry((filename.clone(), minishard_number)).or_insert(Vec::new());
-    //         label_list.push(label);
-    //
-    //         let all_label_list = to_all_labels.entry(filename.clone()).or_insert(Vec::new());
-    //         all_label_list.push(label);
-    //
-    //         let filename_list = filename_to_minishard_num.entry(filename.clone()).or_insert(Vec::new());
-    //         filename_list.push(minishard_number);
-    //     }
-    //     console::log_1(&format!("exists: to_labels {:?}", to_labels.iter().format(", ")).into());
-    //     console::log_1(&format!("exists: to_all_labels {:?}", to_all_labels.iter().format(", ")).into());
-    //     console::log_1(&format!("exists: filename_to_minishard_num {:?}", filename_to_minishard_num.iter().format(", ")).into());
-    //
-    //     let label_filenames = to_all_labels.keys().cloned().collect();
-    //     let load_indices = self.get_indices(&label_filenames, Some(path), progress);
-    //
-    //     Box::new(load_indices.and_then(move |indices| {
-    //         console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
-    //
-    //         let requests = indices.iter()
-    //             .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
-    //             .collect();
-    //         self.get_minishard_indices_for_files(&requests, Some(path), progress)
-    //     }).and_then(move |all_minishards| {
-    //         console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
-    //
-    //         let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
-    //         for (filename, file_minishards) in all_minishards.into_iter() {
-    //             let filepath = path_join(vec![&path, &filename]).unwrap();
-    //             for (mini_no, msi) in file_minishards.into_iter() {
-    //                 let labels = to_labels.get(&(filename.clone(), mini_no)).unwrap();
-    //
-    //                 let msi_is_none = msi.is_none();
-    //                 let msi_data = msi.unwrap_or(vec![]);
-    //
-    //                 for label in labels.iter() {
-    //                     if msi_is_none {
-    //                         results.insert(*label, None);
-    //                         continue;
-    //                     }
-    //
-    //                     // Get numerical indices of rows where the first column (index label) matches
-    //                     // the query label. In Python: np.where(msi[:,0] == label)[0]
-    //                     let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
-    //                         .map(|i| i.clone()).collect();
-    //                     if idx.len() == 0 {
-    //                         results.insert(*label, None);
-    //                     } else {
-    //                         if return_byte_range.unwrap_or(false) {
-    //                             // Get minishard index number at the found location
-    //                             // In Python: msi[idx,:][0]
-    //                             let (_, offset, size) = idx[0];
-    //                             results.insert(*label, Some((filepath.clone(), offset, size)));
-    //                         } else {
-    //                             results.insert(*label, Some((filepath.clone(), 0, 0)));
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //
-    //         ok(results)
-    //     }))
-    // }
+    pub async fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&'a str>, return_byte_range: Option<bool>,
+            progress:Option<bool>) -> HashMap<u64, Option<(String, u64, u64)>> {
+
+        let path = path_desc.unwrap_or("");
+
+        let mut to_labels: HashMap<(String, u64), Vec<u64>> = HashMap::new();
+        let mut to_all_labels: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut filename_to_minishard_num: HashMap<String, Vec<u64>> = HashMap::new();
+
+
+        let mut unique_labels: Vec<u64> = labels.clone();
+        let mut unique_label_set = HashSet::new();
+        unique_labels.retain(|e| unique_label_set.insert(*e));
+        console::log_1(&format!("exists: unique_label_set {}", unique_label_set.iter().format(", ")).into());
+
+        for label in unique_labels.into_iter() {
+            let (filename, minishard_number) = self.compute_shard_location(label);
+            let label_list = to_labels.entry((filename.clone(), minishard_number)).or_insert(Vec::new());
+            label_list.push(label);
+
+            let all_label_list = to_all_labels.entry(filename.clone()).or_insert(Vec::new());
+            all_label_list.push(label);
+
+            let filename_list = filename_to_minishard_num.entry(filename.clone()).or_insert(Vec::new());
+            filename_list.push(minishard_number);
+        }
+        console::log_1(&format!("exists: to_labels {:?}", to_labels.iter().format(", ")).into());
+        console::log_1(&format!("exists: to_all_labels {:?}", to_all_labels.iter().format(", ")).into());
+        console::log_1(&format!("exists: filename_to_minishard_num {:?}", filename_to_minishard_num.iter().format(", ")).into());
+
+        let label_filenames = to_all_labels.keys().cloned().collect();
+        let indices = self.get_indices(&label_filenames, Some(path), progress).await;
+
+        console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
+
+        let requests = indices.iter()
+            .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
+            .collect();
+        let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress).await;
+        console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
+
+        let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
+        for (filename, file_minishards) in all_minishards.into_iter() {
+            let filepath = path_join(vec![&path, &filename]).unwrap();
+            for (mini_no, msi) in file_minishards.into_iter() {
+                let labels = to_labels.get(&(filename.clone(), mini_no)).unwrap();
+
+                let msi_is_none = msi.is_none();
+                let msi_data = msi.unwrap_or(vec![]);
+
+                for label in labels.iter() {
+                    if msi_is_none {
+                        results.insert(*label, None);
+                        continue;
+                    }
+
+                    // Get numerical indices of rows where the first column (index label) matches
+                    // the query label. In Python: np.where(msi[:,0] == label)[0]
+                    let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
+                        .map(|i| i.clone()).collect();
+                    if idx.len() == 0 {
+                        results.insert(*label, None);
+                    } else {
+                        if return_byte_range.unwrap_or(false) {
+                            // Get minishard index number at the found location
+                            // In Python: msi[idx,:][0]
+                            let (_, offset, size) = idx[0];
+                            results.insert(*label, Some((filepath.clone(), offset, size)));
+                        } else {
+                            results.insert(*label, Some((filepath.clone(), 0, 0)));
+                        }
+                    }
+                }
+            }
+        }
+
+        results
+    }
 
     /*
     def compute_shard_location(self, label):
