@@ -83,7 +83,7 @@ pub type CoordVec<T> = SmallVec<[T; COORD_SMALLVEC_SIZE]>;
 pub type BlockCoord = CoordVec<u32>;
 pub type GridCoord = CoordVec<u64>;
 pub type UnboundedGridCoord = CoordVec<i64>;
-pub type OffsetCoord = CoordVec<i64>;
+pub type OffsetCoord = CoordVec<i32>;
 pub type ChunkSize = CoordVec<u32>;
 pub type ResolutionType = CoordVec<f32>;
 pub type BBox<T> = SmallVec<[T; 2]>;
@@ -634,7 +634,7 @@ impl DatasetAttributes {
         &self.scales[zoom_level].chunk_sizes[0]
     }
 
-    pub fn get_voxel_offset(&self, zoom_level: usize) -> &[i64] {
+    pub fn get_voxel_offset(&self, zoom_level: usize) -> &[i32] {
         &self.scales[zoom_level].voxel_offset
     }
 
@@ -677,12 +677,12 @@ impl DatasetAttributes {
     }
 
     pub fn bounds(&self, zoom_level: usize) -> BBox::<UnboundedGridCoord> {
-        let offset = self.get_voxel_offset(zoom_level).iter().cloned();
+        let offset = self.get_voxel_offset(zoom_level).iter().cloned().map(i64::from);
 
         let mut bbox = BBox::new();
         bbox.push(offset.collect());
         bbox.push(self.get_dimensions(zoom_level).iter()
-                .zip(self.get_voxel_offset(zoom_level).iter().cloned())
+                .zip(self.get_voxel_offset(zoom_level).iter().cloned().map(i64::from))
                 .map(|(d, o)| o.checked_add_unsigned(*d).unwrap())
                 .collect());
         bbox
