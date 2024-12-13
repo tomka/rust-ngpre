@@ -45,7 +45,7 @@ impl NgPreFilesystem {
     /// Open an existing NgPre container by path or create one if not exists.
     ///
     /// Note this will update the version attribute for existing containers.
-    pub fn open_or_create<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+    pub fn open_or_create<P: AsRef<Path>>(base_path: P) -> Result<NgPreFilesystem> {
         let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
@@ -63,6 +63,7 @@ impl NgPreFilesystem {
 
     pub fn get_attributes(&self, path_name: &str) -> Result<Value> {
         let path = self.get_path(path_name)?;
+
         if path.is_dir() {
             let attr_path = path.join(ATTRIBUTES_FILE);
 
@@ -70,13 +71,13 @@ impl NgPreFilesystem {
                 let file = File::open(attr_path)?;
                 file.lock_shared()?;
                 let reader = BufReader::new(file);
-                Ok(serde_json::from_reader(reader)?)
-            } else {
-                Ok(json!({}))
+                return Ok(serde_json::from_reader(reader)?)
             }
-        } else {
-            Err(Error::new(ErrorKind::NotFound, "Path does not exist"))
+
+            return Err(Error::new(ErrorKind::Other, "File either doesn't exists or not a file"))
         }
+
+        return Err(Error::new(ErrorKind::NotADirectory, "Path is not a directory"))
     }
 
     /// Get the filesystem path for a given NgPre data path.
