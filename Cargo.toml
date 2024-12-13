@@ -14,7 +14,7 @@ categories = ["encoding", "filesystem", "science"]
 default = ["bzip", "filesystem", "gzip", "lz", "use_ndarray", "xz", "jpeg"]
 
 bzip = ["bzip2"]
-filesystem = ["fs2", "walkdir"]
+filesystem = []
 gzip = ["flate2"]
 lz = ["lz4"]
 lz_pure = ["lz-fear"]
@@ -29,7 +29,6 @@ serde_json = "1.0.39"
 
 bzip2 = { version = "0.4", optional = true }
 flate2 = { version = "1.0.16", optional = true }
-fs2 = { version = "0.4", optional = true }
 itertools = "0.13"
 lz4 = { version = "1.23", optional = true }
 lz-fear = { version = "0.1.1", optional = true }
@@ -37,7 +36,6 @@ ndarray = { version = "0.13", optional = true }
 num-traits = { version = "0.2", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 smallvec = { version = "1", features = ["serde"] }
-walkdir = { version = "2", optional = true }
 xz2 = { version = "0.1", optional = true }
 zune-jpeg = { version = "0.4.11", optional = true }
 zune-core = "0.4.12"
