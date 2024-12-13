@@ -339,16 +339,11 @@ impl NgPreWriter for NgPreFilesystem {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(path)?;
-        file.lock_exclusive()?;
-        // Truncate after the lock is acquired, rather than on opening.
-        file.set_len(0)?;
 
         let buffer = BufWriter::new(file);
-        <crate::DefaultBlock as DefaultBlockWriter<T, _, _>>::write_block(
-                buffer,
-                data_attrs,
-                block)
+        crate::DefaultBlock::write_block(buffer, data_attrs, block)
     }
 
     fn delete_block(
