@@ -246,21 +246,17 @@ impl NgPreReader for NgPreFilesystem {
 
 impl NgPreLister for NgPreFilesystem {
     fn list(&self, path_name: &str) -> Result<Vec<String>> {
-        // TODO: shouldn't do this in a closure to not equivocate errors with Nones.
-        Ok(fs::read_dir(self.get_path(path_name)?)?
-            .filter_map(|e| {
-                if let Ok(file) = e {
-                    if fs::metadata(file.path()).map(|f| f.file_type().is_dir()).ok() == Some(true) {
-                        file.file_name().into_string().ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect()
-        )
+        let dir_reader = fs::read_dir(self.get_path(path_name)?)?;
+        let mut dir_names: Vec<String> = Vec::new();
+
+        for dir in dir_reader {
+            let dir = dir?;
+            if dir.path().is_dir() {
+                dir_names.push(dir.file_name().to_str().unwrap_or_default().to_string());
+            }
+        }
+
+        Ok(dir_names)
     }
 }
 
