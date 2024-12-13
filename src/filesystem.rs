@@ -173,19 +173,18 @@ impl NgPreReader for NgPreFilesystem {
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
     ) -> Result<Option<VecDataBlock<T>>>
-            where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock,
-                  T: ReflectedType {
+    where
+        VecDataBlock<T>: DataBlock<T> + ReadableDataBlock,
+        T: ReflectedType
+    {
         let block_file = self.get_data_block_path(path_name, &grid_position)?;
         if block_file.is_file() {
             let file = File::open(block_file)?;
             let reader = BufReader::new(file);
-            Ok(Some(<crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block(
-                reader,
-                data_attrs,
-                grid_position)?))
-        } else {
-            Ok(None)
+            return Ok(Some(crate::DefaultBlock::read_block(reader, data_attrs, grid_position)?))
         }
+
+        Ok(None)
     }
 
     fn read_block_into<T: ReflectedType, B: DataBlock<T> + ReinitDataBlock<T> + ReadableDataBlock>(
