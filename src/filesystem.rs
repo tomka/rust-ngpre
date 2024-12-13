@@ -1,7 +1,7 @@
 //! A filesystem-backed NgPre container.
 
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFrom};
+use std::io::{self, BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -51,13 +51,13 @@ impl NgPreFilesystem {
         };
 
         fs::create_dir_all(base_path)?;
+        let version = reader.get_version()?;
 
-        if reader.get_version().map(|v| !is_version_compatible(&crate::VERSION, &v)).unwrap_or(false) {
+        if !is_version_compatible(&crate::VERSION, &version) {
             return Err(Error::new(ErrorKind::Other, "TODO: Incompatible version"))
-        } else {
-            reader.set_attribute("", crate::VERSION_ATTRIBUTE_KEY.to_owned(), crate::VERSION.to_string())?;
         }
 
+        reader.set_attribute("", crate::VERSION_ATTRIBUTE_KEY.to_string(), crate::VERSION.to_string())?;
         Ok(reader)
     }
 
