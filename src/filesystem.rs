@@ -310,20 +310,7 @@ impl NgPreWriter for NgPreFilesystem {
         path_name: &str,
     ) -> Result<()> {
         let path = self.get_path(path_name)?;
-
-        for entry in WalkDir::new(path).contents_first(true) {
-            let entry = entry?;
-
-            if entry.file_type().is_dir() {
-                fs::remove_dir(entry.path())?;
-            } else {
-                let file = File::open(entry.path())?;
-                file.lock_exclusive()?;
-                fs::remove_file(entry.path())?;
-            }
-        }
-
-        Ok(())
+        fs::remove_dir_all(path)
     }
 
     fn write_block<T: ReflectedType, B: DataBlock<T> + WriteableDataBlock>(
@@ -354,10 +341,6 @@ impl NgPreWriter for NgPreFilesystem {
         let path = self.get_data_block_path(path_name, grid_position)?;
 
         if path.exists() {
-            let file = fs::OpenOptions::new()
-                .read(true)
-                .open(&path)?;
-            file.lock_exclusive()?;
             fs::remove_file(&path)?;
         }
 
