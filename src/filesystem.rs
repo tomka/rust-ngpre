@@ -198,15 +198,11 @@ impl NgPreReader for NgPreFilesystem {
         if block_file.is_file() {
             let file = File::open(block_file)?;
             let reader = BufReader::new(file);
-            <crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block_into(
-                reader,
-                data_attrs,
-                grid_position,
-                block)?;
-            Ok(Some(()))
-        } else {
-            Ok(None)
+            crate::DefaultBlock::read_block_into(reader, data_attrs, grid_position, block)?;
+            return Ok(Some(()))
         }
+
+        Ok(None)
     }
 
     fn block_metadata(
