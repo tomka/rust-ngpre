@@ -1,7 +1,7 @@
 //! A filesystem-backed NgPre container.
 
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -127,6 +127,7 @@ impl NgPreFilesystem {
         Ok(path)
     }
 
+    /// Get the `FILE PATH` of the **ATTRIBUTES FILE**
     fn get_attributes_path(&self, path_name: &str) -> Result<PathBuf> {
         let mut path = self.get_path(path_name)?;
         path.push(ATTRIBUTES_FILE);
@@ -135,14 +136,18 @@ impl NgPreFilesystem {
 }
 
 impl NgPreReader for NgPreFilesystem {
+    // TODO: dedicated error type should clean this up.
+    /// Get the NgPre specification version of the container.
+    /// This function may **panic** if failed to parse the `string` into `Version`
     fn get_version(&self) -> Result<Version> {
-        // TODO: dedicated error type should clean this up.
-        Ok(Version::from_str(self
-                .get_attributes("")?
-                .get(crate::VERSION_ATTRIBUTE_KEY)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Version attribute not present"))?
-                .as_str().unwrap_or("")
-            ).unwrap())
+        let attrs = self.get_attributes("")?;
+        if attrs.is_array() {
+            let version = attrs.get(crate::VERSION_ATTRIBUTE_KEY).ok_or_else(|| Error::new(ErrorKind::NotFound, "Version attribute not present"))?;
+            let ret = Version::from_str(version.as_str().unwrap_or_default()).expect("failed to parse the string into the version");
+            return Ok(ret)
+        }
+
+        Err(Error::new(ErrorKind::Other, "attribute isn't an array"))
     }
 
     fn get_dataset_attributes(&self, path_name: &str) -> Result<DatasetAttributes> {
