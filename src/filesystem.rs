@@ -5,9 +5,7 @@ use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFr
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use fs2::FileExt;
 use serde_json::{self, json, Value};
-use walkdir::WalkDir;
 
 use crate::{
   is_version_compatible, DataBlock, DataBlockMetadata, DatasetAttributes, DefaultBlockReader,
@@ -281,7 +279,6 @@ impl NgPreWriter for NgPreFilesystem {
             .write(true)
             .create(true)
             .open(self.get_attributes_path(path_name)?)?;
-        file.lock_exclusive()?;
 
         let mut existing_buf = String::new();
         file.read_to_string(&mut existing_buf)?;
