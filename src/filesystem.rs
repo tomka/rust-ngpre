@@ -75,7 +75,7 @@ impl NgPreFilesystem {
         Ok(reader)
     }
 
-    /// Open an existing NgPre container by path or create one if none exists.
+    /// Open an existing NgPre container by path or create one if not exists.
     ///
     /// Note this will update the version attribute for existing containers.
     pub fn open_or_create<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
