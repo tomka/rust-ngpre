@@ -93,7 +93,7 @@ impl NgPreFilesystem {
                     "Path name is outside this NgPre filesystem on a prefix path")),
                 Some(Component::RootDir) => (),
                 // This should be unreachable.
-                _ => return Err(Error::new(ErrorKind::NotFound, "Path is malformed")),
+                _ => return Err(Error::new(ErrorKind::Other, "Path is malformed")),
             }
         }
         let unrooted_path = components.as_path();
