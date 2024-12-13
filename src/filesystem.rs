@@ -69,7 +69,6 @@ impl NgPreFilesystem {
 
             if attr_path.exists() && attr_path.is_file() {
                 let file = File::open(attr_path)?;
-                file.lock_shared()?;
                 let reader = BufReader::new(file);
                 return Ok(serde_json::from_reader(reader)?)
             }
@@ -181,7 +180,6 @@ impl NgPreReader for NgPreFilesystem {
         let block_file = self.get_data_block_path(path_name, &grid_position)?;
         if block_file.is_file() {
             let file = File::open(block_file)?;
-            file.lock_shared()?;
             let reader = BufReader::new(file);
             Ok(Some(<crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block(
                 reader,
@@ -202,7 +200,6 @@ impl NgPreReader for NgPreFilesystem {
         let block_file = self.get_data_block_path(path_name, &grid_position)?;
         if block_file.is_file() {
             let file = File::open(block_file)?;
-            file.lock_shared()?;
             let reader = BufReader::new(file);
             <crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block_into(
                 reader,
@@ -239,7 +236,6 @@ impl NgPreReader for NgPreFilesystem {
     fn list_attributes(&self, path_name: &str) -> Result<Value> {
         let attr_path = self.get_attributes_path(path_name)?;
         let file = File::open(attr_path)?;
-        file.lock_shared()?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }
