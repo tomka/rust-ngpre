@@ -151,9 +151,10 @@ impl NgPreReader for NgPreFilesystem {
         Ok(serde_json::from_reader(reader)?)
     }
 
-    fn exists(&self, path_name: &str) -> Result<bool> {
-        let target = self.get_path(path_name)?;
-        Ok(target.is_dir())
+    /// Check if `PATH` exists for NGPRE dataset
+    fn exists(&self, path: &str) -> Result<bool> {
+        let target = self.get_path(path)?;
+        target.try_exists()
     }
 
     fn get_block_uri(&self, path_name: &str, grid_position: &[u64]) -> Result<String> {
