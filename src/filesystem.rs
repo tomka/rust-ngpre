@@ -1,55 +1,22 @@
 //! A filesystem-backed NgPre container.
 
-use std::fs::{
-    self,
-    File,
-};
-use std::io::{
-    Error,
-    ErrorKind,
-    BufReader,
-    BufWriter,
-    Read,
-    Result,
-    Seek,
-    SeekFrom,
-};
-use std::path::{
-    PathBuf,
-};
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Result, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use fs2::FileExt;
-use serde_json::{
-    self,
-    json,
-    Value,
-};
+use serde_json::{self, json, Value};
 use walkdir::WalkDir;
 
 use crate::{
-    is_version_compatible,
-    DataBlock,
-    DataBlockMetadata,
-    DatasetAttributes,
-    DefaultBlockReader,
-    DefaultBlockWriter,
-    GridCoord,
-    NgPreLister,
-    NgPreReader,
-    NgPreWriter,
-    ReadableDataBlock,
-    ReflectedType,
-    ReinitDataBlock,
-    VecDataBlock,
-    Version,
-    WriteableDataBlock,
+  is_version_compatible, DataBlock, DataBlockMetadata, DatasetAttributes, DefaultBlockReader,
+  DefaultBlockWriter, GridCoord, NgPreLister, NgPreReader, NgPreWriter, ReadableDataBlock,
+  ReflectedType, ReinitDataBlock, VecDataBlock, Version, WriteableDataBlock,
 };
-
 
 /// Name of the attributes file stored in the container root and dataset dirs.
 const ATTRIBUTES_FILE: &str = "attributes.json";
-
 
 /// A filesystem-backed NgPre container.
 #[derive(Clone, Debug)]
@@ -59,7 +26,7 @@ pub struct NgPreFilesystem {
 
 impl NgPreFilesystem {
     /// Open an existing NgPre container by path.
-    pub fn open<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+    pub fn open<P: AsRef<Path>>(base_path: P) -> Result<NgPreFilesystem> {
         let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
