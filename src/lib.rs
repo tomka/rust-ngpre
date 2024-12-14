@@ -21,7 +21,7 @@ pub extern crate smallvec;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
-use std::io::{Error, ErrorKind, Read};
+use std::io::{self, Read};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -85,30 +85,20 @@ pub enum ShardingHashType {
     Murmurhash3X86_128,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MinishardIndexEncoding {
+    #[default]
     Raw,
     Gzip,
 }
 
-impl Default for MinishardIndexEncoding {
-    fn default() -> MinishardIndexEncoding {
-        MinishardIndexEncoding::Raw
-    }
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ShardingChunkDataEncoding {
+    #[default]
     Raw,
     Gzip,
-}
-
-impl Default for ShardingChunkDataEncoding {
-    fn default() -> ShardingChunkDataEncoding {
-        ShardingChunkDataEncoding::Raw
-    }
 }
 
 // FIXME: Why add the + std::convert::AsRef...?
@@ -269,8 +259,8 @@ impl ShardingSpecification {
 
         let mut minishard_mask: u64 = 1;
         for _ in 0..(val - 1) {
-            minishard_mask = minishard_mask << (1 as u64);
-            minishard_mask = minishard_mask | (1 as u64);
+            minishard_mask = minishard_mask << 1_u64;
+            minishard_mask = minishard_mask | 1_u64;
         }
         minishard_mask
     }
@@ -285,7 +275,7 @@ impl ShardingSpecification {
     */
     pub fn compute_shard_mask(&self, shard_bits: u64, minishard_bits: u64) -> u64 {
         let ones64 = 0xffffffffffffffff as u64;
-        let movement = (minishard_bits + shard_bits) as u64;
+        let movement = minishard_bits + shard_bits;
         let shard_mask = !((ones64 >> movement) << movement);
         let minishard_mask = self.compute_minishard_mask(minishard_bits);
         shard_mask & (!minishard_mask)
@@ -306,20 +296,20 @@ impl ShardingSpecification {
         }
 
         // Default to identity hash
-        val as u64
+        val
     }
 
     pub fn compute_shard_location(&self, key:u64) -> ShardLocation {
         let shifted_chunkid = key >> self.preshift_bits;
         let chunkid = self.hashfn(shifted_chunkid);
         let minishard_number = chunkid & self.minishard_mask;
-        let shard_number = ((chunkid & self.shard_mask) >> self.minishard_bits) as u64;
+        let shard_number = (chunkid & self.shard_mask) >> self.minishard_bits;
         // Lower case hex formatting of shard_number and zfill with zeros for a total length of a
         // quarter of the shard_bits.
         let width = self.shard_bits.div_ceil(4) as usize;
         let normalized_shard_number = format!("{:01$x}", shard_number, width);
 
-        let remainder = chunkid >> ((self.minishard_bits + self.shard_bits) as u64);
+        let remainder = chunkid >> self.minishard_bits + self.shard_bits;
 
         ShardLocation {
             shard_number: normalized_shard_number,
@@ -423,16 +413,16 @@ pub fn u64_to_u8_array(
 /// Non-mutating operations on NgPre containers.
 pub trait NgPreReader {
     /// Get the NgPre specification version of the container.
-    fn get_version(&self) -> Result<Version, Error>;
+    fn get_version(&self) -> io::Result<Version>;
 
     /// Get attributes for a dataset.
-    fn get_dataset_attributes(&self, path_name: &str) -> Result<DatasetAttributes, Error>;
+    fn get_dataset_attributes(&self, path_name: &str) -> io::Result<DatasetAttributes>;
 
     /// Test whether a group or dataset exists.
-    fn exists(&self, path_name: &str) -> Result<bool, Error>;
+    fn exists(&self, path_name: &str) -> io::Result<bool>;
 
     /// Test whether a dataset exists.
-    fn dataset_exists(&self, path_name: &str) -> Result<bool, Error> {
+    fn dataset_exists(&self, path_name: &str) -> io::Result<bool> {
         Ok(self.exists(path_name)? && self.get_dataset_attributes(path_name).is_ok())
     }
 
@@ -441,7 +431,7 @@ pub trait NgPreReader {
     /// Whether this requires that the dataset and block exist is currently
     /// implementation dependent. Whether this URI is a URL is implementation
     /// dependent.
-    fn get_block_uri(&self, path_name: &str, grid_position: &[u64]) -> Result<String, Error>;
+    fn get_block_uri(&self, path_name: &str, grid_position: &[u64]) -> io::Result<String>;
 
     /// Read a single dataset block into a linear vec.
     fn read_block<T>(
@@ -449,7 +439,7 @@ pub trait NgPreReader {
         path_name: &str,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
-    ) -> Result<Option<VecDataBlock<T>>, Error>
+    ) -> io::Result<Option<VecDataBlock<T>>>
         where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock,
               T: ReflectedType;
 
@@ -460,7 +450,7 @@ pub trait NgPreReader {
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
         block: &mut B,
-    ) -> Result<Option<()>, Error>;
+    ) -> io::Result<Option<()>>;
 
     /// Read metadata about a block.
     fn block_metadata(
@@ -468,16 +458,16 @@ pub trait NgPreReader {
         path_name: &str,
         data_attrs: &DatasetAttributes,
         grid_position: &[u64],
-    ) -> Result<Option<DataBlockMetadata>, Error>;
+    ) -> io::Result<Option<DataBlockMetadata>>;
 
     /// List all attributes of a group.
-    fn list_attributes(&self, path_name: &str) -> Result<serde_json::Value, Error>;
+    fn list_attributes(&self, path_name: &str) -> io::Result<serde_json::Value>;
 }
 
 /// Non-mutating operations on NgPre containers that support group discoverability.
 pub trait NgPreLister : NgPreReader {
     /// List all groups (including datasets) in a group.
-    fn list(&self, path_name: &str) -> Result<Vec<String>, Error>;
+    fn list(&self, path_name: &str) -> io::Result<Vec<String>>;
 }
 
 /// Mutating operations on NgPre containers.
@@ -488,7 +478,7 @@ pub trait NgPreWriter : NgPreReader {
         path_name: &str,
         key: String,
         attribute: T,
-    ) -> Result<(), Error> {
+    ) -> io::Result<()> {
         self.set_attributes(
             path_name,
             vec![(key, serde_json::to_value(attribute)?)].into_iter().collect())
@@ -499,14 +489,14 @@ pub trait NgPreWriter : NgPreReader {
         &self, // TODO: should this be mut for semantics?
         path_name: &str,
         attributes: serde_json::Map<String, serde_json::Value>,
-    ) -> Result<(), Error>;
+    ) -> io::Result<()>;
 
     /// Set mandatory dataset attributes.
     fn set_dataset_attributes(
         &self,
         path_name: &str,
         data_attrs: &DatasetAttributes,
-    ) -> Result<(), Error> {
+    ) -> io::Result<()> {
         if let serde_json::Value::Object(map) = serde_json::to_value(data_attrs)? {
             self.set_attributes(path_name, map)
         } else {
@@ -515,7 +505,7 @@ pub trait NgPreWriter : NgPreReader {
     }
 
     /// Create a group (directory).
-    fn create_group(&self, path_name: &str) -> Result<(), Error>;
+    fn create_group(&self, path_name: &str) -> io::Result<()>;
 
     /// Create a dataset. This will create the dataset group and attributes,
     /// but not populate any block data.
@@ -523,13 +513,13 @@ pub trait NgPreWriter : NgPreReader {
         &self,
         path_name: &str,
         data_attrs: &DatasetAttributes,
-    ) -> Result<(), Error> {
+    ) -> io::Result<()> {
         self.create_group(path_name)?;
         self.set_dataset_attributes(path_name, data_attrs)
     }
 
     /// Remove the NgPre container.
-    fn remove_all(&self) -> Result<(), Error> {
+    fn remove_all(&self) -> io::Result<()> {
         self.remove("")
     }
 
@@ -539,14 +529,14 @@ pub trait NgPreWriter : NgPreReader {
     fn remove(
         &self,
         path_name: &str,
-    ) -> Result<(), Error>;
+    ) -> io::Result<()>;
 
     fn write_block<T: ReflectedType, B: DataBlock<T> + WriteableDataBlock>(
         &self,
         path_name: &str,
         data_attrs: &DatasetAttributes,
         block: &B,
-    ) -> Result<(), Error>;
+    ) -> io::Result<()>;
 
     /// Delete a block from a dataset.
     ///
@@ -556,7 +546,7 @@ pub trait NgPreWriter : NgPreReader {
         &self,
         path_name: &str,
         grid_position: &[u64],
-    ) -> Result<bool, Error>;
+    ) -> io::Result<bool>;
 }
 
 
@@ -706,7 +696,7 @@ impl DatasetAttributes {
     pub fn get_sharding_spec(&self, zoom_level: usize) -> Option<&ShardingSpecification> {
         let sharding = &self.get_scales()[zoom_level].sharding;
         match &sharding {
-            Some(e) => Some(&e),
+            Some(e) => Some(e),
             None => None
         }
     }
@@ -738,7 +728,7 @@ pub trait ReadableDataBlock {
     ///
     /// Read the stream directly into the block data instead of creating a copied
     /// byte buffer.
-    fn read_data<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
+    fn read_data<R: io::Read>(&mut self, source: R) -> io::Result<()>;
 
     //fn read_data_sharded<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
 }
@@ -746,7 +736,7 @@ pub trait ReadableDataBlock {
 /// Traits for data blocks that can write out data.
 pub trait WriteableDataBlock {
     /// Write the data from this block into a target.
-    fn write_data<W: std::io::Write>(&self, target: W) -> std::io::Result<()>;
+    fn write_data<W: io::Write>(&self, target: W) -> io::Result<()>;
 }
 
 /// Common interface for data blocks of element (rust) type `T`.
@@ -817,13 +807,13 @@ impl<T: ReflectedType> ReinitDataBlock<T> for VecDataBlock<T> {
 macro_rules! vec_data_block_impl {
     ($ty_name:ty, $bo_read_fn:ident, $bo_write_fn:ident) => {
         impl<C: AsMut<[$ty_name]>> ReadableDataBlock for SliceDataBlock<$ty_name, C> {
-            fn read_data<R: std::io::Read>(&mut self, mut source: R) -> std::io::Result<()> {
+            fn read_data<R: io::Read>(&mut self, mut source: R) -> io::Result<()> {
                 source.$bo_read_fn::<NgPreEndian>(self.data.as_mut())
             }
         }
 
         impl<C: AsRef<[$ty_name]>> WriteableDataBlock for SliceDataBlock<$ty_name, C> {
-            fn write_data<W: std::io::Write>(&self, mut target: W) -> std::io::Result<()> {
+            fn write_data<W: io::Write>(&self, mut target: W) -> io::Result<()> {
                 const CHUNK: usize = 256;
                 let mut buf: [u8; CHUNK * std::mem::size_of::<$ty_name>()] =
                     [0; CHUNK * std::mem::size_of::<$ty_name>()];
@@ -843,7 +833,7 @@ macro_rules! vec_data_block_impl {
 // Wrapper trait to erase a generic trait argument for consistent ByteOrder
 // signatures.
 trait ReadBytesExtI8: ReadBytesExt {
-    fn read_i8_into_wrapper<B: ByteOrder>(&mut self, dst: &mut [i8]) -> std::io::Result<()> {
+    fn read_i8_into_wrapper<B: ByteOrder>(&mut self, dst: &mut [i8]) -> io::Result<()> {
         self.read_i8_into(dst)
     }
 }
@@ -860,13 +850,13 @@ vec_data_block_impl!(f32, read_f32_into, write_f32_into);
 vec_data_block_impl!(f64, read_f64_into, write_f64_into);
 
 impl<C: AsMut<[u8]>> ReadableDataBlock for SliceDataBlock<u8, C> {
-    fn read_data<R: std::io::Read>(&mut self, mut source: R) -> std::io::Result<()> {
+    fn read_data<R: io::Read>(&mut self, mut source: R) -> io::Result<()> {
         source.read_exact(self.data.as_mut())
     }
 }
 
 impl<C: AsRef<[u8]>> WriteableDataBlock for SliceDataBlock<u8, C> {
-    fn write_data<W: std::io::Write>(&self, mut target: W) -> std::io::Result<()> {
+    fn write_data<W: io::Write>(&self, mut target: W) -> io::Result<()> {
         target.write_all(self.data.as_ref())
     }
 }
@@ -893,7 +883,7 @@ const BLOCK_FIXED_LEN: u16 = 0;
 const BLOCK_VAR_LEN: u16 = 1;
 
 // https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/volume.md#chunk-encoding
-pub trait DefaultBlockHeaderReader<R: std::io::Read> {
+pub trait DefaultBlockHeaderReader<R: io::Read> {
     fn read_block_header(
         grid_position: GridCoord,
         data_attrs: &DatasetAttributes,
@@ -903,7 +893,7 @@ pub trait DefaultBlockHeaderReader<R: std::io::Read> {
         let bs = data_attrs.get_block_size(zoom_level);
         let nc = data_attrs.get_num_channels();
         let size = smallvec![bs[0], bs[1], bs[2], nc];
-        let num_el = bs.iter().fold(1,|a, &b| a * b);
+        let num_el: u32 = bs.iter().product();
 
         BlockHeader {
             size,
@@ -914,17 +904,17 @@ pub trait DefaultBlockHeaderReader<R: std::io::Read> {
 }
 
 /// Reads blocks from rust readers.
-pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHeaderReader<R> {
+pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderReader<R> {
     fn read_block(
         buffer: R,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
-    ) -> std::io::Result<VecDataBlock<T>>
-            where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock {
-
+    ) -> io::Result<VecDataBlock<T>>
+    where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock
+    {
         if data_attrs.data_type != T::VARIANT {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
 
@@ -945,11 +935,11 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
         block: &mut B,
-    ) -> std::io::Result<()> {
+    ) -> io::Result<()> {
 
         if data_attrs.data_type != T::VARIANT {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
         // FIXME
@@ -968,16 +958,16 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
 }
 
 /// Writes blocks to rust writers.
-pub trait DefaultBlockWriter<T: ReflectedType, W: std::io::Write, B: DataBlock<T> + WriteableDataBlock> {
+pub trait DefaultBlockWriter<T: ReflectedType, W: io::Write, B: DataBlock<T> + WriteableDataBlock> {
     fn write_block(
         mut buffer: W,
         data_attrs: &DatasetAttributes,
         block: &B,
-    ) -> std::io::Result<()> {
+    ) -> io::Result<()> {
 
         if data_attrs.data_type != T::VARIANT {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Attempt to write data block for wrong type."))
         }
 
@@ -1028,7 +1018,7 @@ pub fn gridpoints(bbox: BBox<GridCoord>, volume_bbox: BBox<GridCoord>, chunk_siz
 
 // gridpt: a list of 3d index locations in the grid of chunks (e.g. [(1,1,1)]
 // grid_size:
-pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> Result<Vec<u64>, Error> {
+pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> io::Result<Vec<u64>> {
 
     // Check if the input is empty
     if gridpt.is_empty() {
@@ -1042,16 +1032,16 @@ pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> 
 
     // Check if the total number of bits exceeds 64
     if num_bits.iter().sum::<usize>() > 64 {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
             "Total number of bits exceeds 64"))
     }
 
     // Check if any coordinates exceed the grid size
     for coords in gridpt.iter() {
         if coords.iter().zip(grid_size.iter()).any(|(a,b)| a >= b) {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "Coordinate exceeds grid size"))
         }
     }
@@ -1136,7 +1126,7 @@ pub struct DataLoaderResult {
 
 pub trait DataLoader {
     fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
-        -> HashMap<String, Result<DataLoaderResult, Error>>;
+        -> HashMap<String, io::Result<DataLoaderResult>>;
 }
 
 impl<'a> Debug for (dyn DataLoader + 'a) {
@@ -1157,7 +1147,7 @@ impl<'a> fmt::Debug for CacheService<'a> {
     }
 }
 
-impl<'a> CacheService<'a> {
+impl CacheService<'_> {
 
     /*
     def download_as(self, requests, compress=None, progress=None):
@@ -1237,7 +1227,7 @@ impl<'a> CacheService<'a> {
     */
     pub async fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>) -> HashMap<(String, u64, u64), Vec<u8>> {
 
-		if requests.len() == 0 {
+		if requests.is_empty() {
 			return HashMap::new();
 		}
 
@@ -1288,14 +1278,13 @@ impl<'a> CacheService<'a> {
         let is_enabled = self.enabled;
 
         for (_path, frag) in load_fragments.iter() {
-            match frag {
-                Err(why) => panic!("{:?}", why),
-                _ => (),
+            if let Err(why) = frag {
+                panic!("{:?}", why)
             }
         }
 
-        let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = load_fragments.into_iter()
-            .map(|(_p, x)| match x {
+        let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = load_fragments.into_values()
+            .map(|x| match x {
                 Err(why) => panic!("{:?}", why),
                 Ok(res) => res,
             })
@@ -1372,7 +1361,7 @@ impl<'a> CacheService<'a> {
 		if !self.enabled {
 			return DataLocationDetails {
 				local: Vec::new(),
-				remote: cloudpaths.iter().cloned().collect(),
+				remote: cloudpaths.to_vec()
 			};
 		}
 
@@ -1415,7 +1404,7 @@ struct BundleDetails {
 }
 
 #[derive(Clone, Debug)]
-struct IndexFileDetails {
+pub struct IndexFileDetails {
     path: String,
     local_alias: String,
     start: u64,
@@ -1452,11 +1441,11 @@ impl<'a> CloudFiles<'a> {
             byte_range_end: x.byterange.end,
             error: None,
             content: x.content,
-        }).collect::<Vec<BundleDetails>>()
+        }).collect()
     }
 }
 
-impl<'a> fmt::Display for CloudFiles<'a> {
+impl fmt::Display for CloudFiles<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         //write!(f, "ShardReader ({}, {})", self.0, self.1)
         write!(f, "CloudFiles (path: {:?})", self.path)
@@ -1624,7 +1613,7 @@ impl<'a> ShardReader<'a> {
     /// Returns: map of label vs. bytestring
     ///
     pub async fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
-        parallel:Option<u32>, raw:Option<bool>) -> Result<HashMap<u64, Option<Vec<u8>>>, Error>
+        parallel:Option<u32>, raw:Option<bool>) -> io::Result<HashMap<u64, Option<Vec<u8>>>>
     {
         console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
         let _path = path.unwrap_or("");
@@ -1633,7 +1622,7 @@ impl<'a> ShardReader<'a> {
 
         let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
 
-        if labels.len() == 0 {
+        if labels.is_empty() {
             return Ok(results);
         }
 
@@ -1684,7 +1673,7 @@ impl<'a> ShardReader<'a> {
         let mut sorted_files = files.to_vec();
         sorted_files.sort_unstable_by_key(|item| (item.path.clone(), item.start));
         for chunk in sorted_files.iter_mut() {
-            if bundles.len() == 0 || (chunk.path != bundles.last().unwrap().path)
+            if bundles.is_empty() || (chunk.path != bundles.last().unwrap().path)
                     || (chunk.start != bundles.last().unwrap().end)
             {
                 bundles.push(ShardingBundle {
@@ -1723,8 +1712,8 @@ impl<'a> ShardReader<'a> {
         for bundle_req in bundles.iter() {
             let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
             if bundle_resp_item.is_none() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput, "Bundle error" /*bundle_resp.error.unwrap() */));
             } else {
                 let bundle_resp = bundle_resp_item.unwrap();
                 for chunk in bundle_req.subranges.iter() {
@@ -1834,13 +1823,13 @@ impl<'a> ShardReader<'a> {
 
         for label in unique_labels.into_iter() {
             let (filename, minishard_number) = self.compute_shard_location(label);
-            let label_list = to_labels.entry((filename.clone(), minishard_number)).or_insert(Vec::new());
+            let label_list = to_labels.entry((filename.clone(), minishard_number)).or_default();
             label_list.push(label);
 
-            let all_label_list = to_all_labels.entry(filename.clone()).or_insert(Vec::new());
+            let all_label_list = to_all_labels.entry(filename.clone()).or_default();
             all_label_list.push(label);
 
-            let filename_list = filename_to_minishard_num.entry(filename.clone()).or_insert(Vec::new());
+            let filename_list = filename_to_minishard_num.entry(filename.clone()).or_default();
             filename_list.push(minishard_number);
         }
         console::log_1(&format!("exists: to_labels {:?}", to_labels.iter().format(", ")).into());
@@ -1875,19 +1864,16 @@ impl<'a> ShardReader<'a> {
 
                     // Get numerical indices of rows where the first column (index label) matches
                     // the query label. In Python: np.where(msi[:,0] == label)[0]
-                    let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label)
-                        .map(|i| i.clone()).collect();
-                    if idx.len() == 0 {
+                    let idx: Vec<(u64, u64, u64)> = msi_data.iter().filter(|msi| msi.0 == *label).copied().collect();
+                    if idx.is_empty() {
                         results.insert(*label, None);
-                    } else {
-                        if return_byte_range.unwrap_or(false) {
+                    } else if return_byte_range.unwrap_or(false) {
                             // Get minishard index number at the found location
                             // In Python: msi[idx,:][0]
                             let (_, offset, size) = idx[0];
                             results.insert(*label, Some((filepath.clone(), offset, size)));
-                        } else {
-                            results.insert(*label, Some((filepath.clone(), 0, 0)));
-                        }
+                    } else {
+                        results.insert(*label, Some((filepath.clone(), 0, 0)));
                     }
                 }
             }
@@ -1909,7 +1895,7 @@ impl<'a> ShardReader<'a> {
         let shard_num = shard_loc.shard_number;
         let filename = format!("{shard_num}.shard");
 
-        (filename, shard_loc.minishard_number.clone())
+        (filename, shard_loc.minishard_number)
     }
 
     /*
@@ -2017,18 +2003,18 @@ impl<'a> ShardReader<'a> {
         index = index.reshape( (index.size // 2, 2), order='C' )
         return index + self.spec.index_length()
     */
-    pub fn decode_index(&self, binary: &Vec<u8>, filename: Option<String>) -> Result<Vec<(u64, u64)>, Error> {
+    pub fn decode_index(&self, binary: &Vec<u8>, filename: Option<String>) -> io::Result<Vec<(u64, u64)>> {
         let normalized_filename = filename.unwrap_or("Shard".to_string());
 
         let bin_len: u64 = binary.len().try_into().unwrap();
         if bin_len == 0 {
-            return Err(Error::new( ErrorKind::InvalidInput, format!("{normalized_filename} was zero bytes.")));
+            return Err(io::Error::new( io::ErrorKind::InvalidInput, format!("{normalized_filename} was zero bytes.")));
         }
 
         let spec_len: u64 = self.spec.index_length();
         if bin_len != spec_len {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 format!("{normalized_filename}: shard index was an incorrect length ({bin_len}) for this specification ({spec_len}).")));
         }
 
@@ -2107,7 +2093,7 @@ impl<'a> ShardReader<'a> {
         let mut msn_map: HashMap<(String, u64, u64), u64> = HashMap::new();
 
         let mut download_requests: Vec<IndexFileDetails> = Vec::new();
-        for (filename, &ref index, minishard_nos) in requests {
+        for (filename, index, minishard_nos) in requests {
             let (fulfilled_requests, pending_requests) = self.compute_minishard_index_requests(
                 filename.clone(), &index, &minishard_nos, path);
             fulfilled_by_filename.insert(filename.to_string(), fulfilled_requests);
@@ -2253,8 +2239,7 @@ impl<'a> ShardReader<'a> {
                 &decompressed
             };
 
-        let mut index: Vec<u64> = vec![0; usize::try_from(
-            minishard_index.len().div_floor(8)).unwrap()]; // buffer length / 8 = 8
+        let mut index: Vec<u64> = vec![0; minishard_index.len().div_floor(8)]; // buffer length / 8 = 8
         u8_to_u64_array(&minishard_index, &mut index);
 
         let mut decoded_minishard_index: Vec<(u64, u64, u64)> = Vec::new();
@@ -2267,11 +2252,11 @@ impl<'a> ShardReader<'a> {
 
         let mut label_cumsum = 0;
         let mut offset_cumsum = 0;
-        for (i, idx) in decoded_minishard_index.iter_mut().enumerate() {
-            label_cumsum += idx.0;
-            offset_cumsum += idx.1;
-            idx.0 = label_cumsum;
-            idx.1 = offset_cumsum;
+        for val in decoded_minishard_index.iter_mut() {
+            label_cumsum += val.0;
+            offset_cumsum += val.1;
+            val.0 = label_cumsum;
+            val.1 = offset_cumsum;
         }
 
         let mut size_cumsum = 0;
@@ -2289,7 +2274,7 @@ impl<'a> ShardReader<'a> {
     }
 }
 
-impl<'a> fmt::Display for ShardReader<'a> {
+impl fmt::Display for ShardReader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         //write!(f, "ShardReader ({}, {})", self.0, self.1)
         write!(f, "ShardReader")
@@ -2302,6 +2287,6 @@ impl<'a> fmt::Display for ShardReader<'a> {
 // `DefaultBlockReader`, etc.
 #[derive(Debug)]
 pub struct DefaultBlock;
-impl<R: std::io::Read> DefaultBlockHeaderReader<R> for DefaultBlock {}
-impl<T: ReflectedType, R: std::io::Read> DefaultBlockReader<T, R> for DefaultBlock {}
-impl<T: ReflectedType, W: std::io::Write, B: DataBlock<T> + WriteableDataBlock> DefaultBlockWriter<T, W, B> for DefaultBlock {}
+impl<R: io::Read> DefaultBlockHeaderReader<R> for DefaultBlock {}
+impl<T: ReflectedType, R: io::Read> DefaultBlockReader<T, R> for DefaultBlock {}
+impl<T: ReflectedType, W: io::Write, B: DataBlock<T> + WriteableDataBlock> DefaultBlockWriter<T, W, B> for DefaultBlock {}
