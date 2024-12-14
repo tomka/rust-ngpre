@@ -898,18 +898,18 @@ pub trait DefaultBlockHeaderReader<R: std::io::Read> {
         grid_position: GridCoord,
         data_attrs: &DatasetAttributes,
         zoom_level: usize,
-    ) -> std::io::Result<BlockHeader> {
+    ) -> BlockHeader {
 
         let bs = data_attrs.get_block_size(zoom_level);
         let nc = data_attrs.get_num_channels();
         let size = smallvec![bs[0], bs[1], bs[2], nc];
         let num_el = bs.iter().fold(1,|a, &b| a * b);
 
-        Ok(BlockHeader {
+        BlockHeader {
             size,
             grid_position,
             num_el: num_el as usize,
-        })
+        }
     }
 }
 
@@ -929,7 +929,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         }
 
         let zoom_level = 0;
-        let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level);
 
         let mut block = T::create_data_block(header);
         let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
@@ -954,7 +954,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: std::io::Read>: DefaultBlockHe
         }
         // FIXME
         let zoom_level = 0;
-        let header = Self::read_block_header(grid_position, data_attrs, zoom_level)?;
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level);
 
         block.reinitialize(header);
         let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
