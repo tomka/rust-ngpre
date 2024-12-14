@@ -18,48 +18,23 @@ doc_comment::doctest!("../README.md");
 #[macro_use]
 pub extern crate smallvec;
 
-use core::fmt::Debug;
-
-use std::convert::TryInto;
-use std::convert::TryFrom;
-use std::fmt;
-use std::ops::Div;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::io::{
-    Error,
-    ErrorKind,
-    Read,
-};
+use std::collections::{HashMap, HashSet};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::{self, Debug};
+use std::io::{Error, ErrorKind, Read};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::time::SystemTime;
-use std::path::Path;
-use std::path::PathBuf;
 use std::ops::Range;
-
-use byteorder::{
-    LittleEndian,
-    ByteOrder,
-    ReadBytesExt,
-    WriteBytesExt,
-};
-use lru::LruCache;
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use smallvec::SmallVec;
-
-use std::io::Cursor;
-//use murmur3::murmur3_x86_128;
-use flate2::read::GzDecoder;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::compression::Compression;
-use crate::compression::gzip::GzipCompression;
-
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
+use flate2::read::GzDecoder;
 use itertools::Itertools;
-
+use lru::LruCache;
+use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use web_sys::console;
 
 pub mod compression;
