@@ -287,14 +287,13 @@ impl ShardingSpecification {
         return uint64(minishard_mask)
     */
     pub fn compute_minishard_mask(&self, val: u64) -> u64 {
-        if val < 0 {
-            panic!("must be greater or equal to zero");
-        } else if val == 0 {
+        // No need to check if val is less than zero because of type constraints
+        if val == 0 {
             return 0;
         }
 
         let mut minishard_mask: u64 = 1;
-        for i in 0..(val - 1) {
+        for _ in 0..(val - 1) {
             minishard_mask = minishard_mask << (1 as u64);
             minishard_mask = minishard_mask | (1 as u64);
         }
