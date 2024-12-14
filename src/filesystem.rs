@@ -1,55 +1,20 @@
 //! A filesystem-backed NgPre container.
 
-use std::fs::{
-    self,
-    File,
-};
-use std::io::{
-    Error,
-    ErrorKind,
-    BufReader,
-    BufWriter,
-    Read,
-    Result,
-    Seek,
-    SeekFrom,
-};
-use std::path::{
-    PathBuf,
-};
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use fs2::FileExt;
-use serde_json::{
-    self,
-    json,
-    Value,
-};
-use walkdir::WalkDir;
+use serde_json::{self, json, Value};
 
+use crate::prelude::*;
 use crate::{
-    is_version_compatible,
-    DataBlock,
-    DataBlockMetadata,
-    DatasetAttributes,
-    DefaultBlockReader,
-    DefaultBlockWriter,
-    GridCoord,
-    NgPreLister,
-    NgPreReader,
-    NgPreWriter,
-    ReadableDataBlock,
-    ReflectedType,
-    ReinitDataBlock,
-    VecDataBlock,
-    Version,
-    WriteableDataBlock,
+  is_version_compatible, DefaultBlockReader, DefaultBlockWriter, ReadableDataBlock,
+  ReinitDataBlock, Version, WriteableDataBlock,
 };
-
 
 /// Name of the attributes file stored in the container root and dataset dirs.
 const ATTRIBUTES_FILE: &str = "attributes.json";
-
 
 /// A filesystem-backed NgPre container.
 #[derive(Clone, Debug)]
@@ -59,7 +24,9 @@ pub struct NgPreFilesystem {
 
 impl NgPreFilesystem {
     /// Open an existing NgPre container by path.
-    pub fn open<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+    pub fn open<P: AsRef<Path>>(base_path: P) -> io::Result<NgPreFilesystem> {
+        use io::{Error, ErrorKind};
+
         let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
@@ -75,49 +42,54 @@ impl NgPreFilesystem {
         Ok(reader)
     }
 
-    /// Open an existing NgPre container by path or create one if none exists.
+    /// Open an existing NgPre container by path or create one if not exists.
     ///
     /// Note this will update the version attribute for existing containers.
-    pub fn open_or_create<P: AsRef<std::path::Path>>(base_path: P) -> Result<NgPreFilesystem> {
+    pub fn open_or_create<P: AsRef<Path>>(base_path: P) -> io::Result<NgPreFilesystem> {
+        use io::{Error, ErrorKind};
+
         let reader = NgPreFilesystem {
             base_path: PathBuf::from(base_path.as_ref()),
         };
 
         fs::create_dir_all(base_path)?;
+        let version = reader.get_version()?;
 
-        if reader.get_version().map(|v| !is_version_compatible(&crate::VERSION, &v)).unwrap_or(false) {
+        if !is_version_compatible(&crate::VERSION, &version) {
             return Err(Error::new(ErrorKind::Other, "TODO: Incompatible version"))
-        } else {
-            reader.set_attribute("", crate::VERSION_ATTRIBUTE_KEY.to_owned(), crate::VERSION.to_string())?;
         }
 
+        reader.set_attribute("", crate::VERSION_ATTRIBUTE_KEY.to_string(), crate::VERSION.to_string())?;
         Ok(reader)
     }
 
-    pub fn get_attributes(&self, path_name: &str) -> Result<Value> {
+    pub fn get_attributes(&self, path_name: &str) -> io::Result<Value> {
+        use io::{Error, ErrorKind};
+
         let path = self.get_path(path_name)?;
+
         if path.is_dir() {
             let attr_path = path.join(ATTRIBUTES_FILE);
 
             if attr_path.exists() && attr_path.is_file() {
                 let file = File::open(attr_path)?;
-                file.lock_shared()?;
                 let reader = BufReader::new(file);
-                Ok(serde_json::from_reader(reader)?)
-            } else {
-                Ok(json!({}))
+                return Ok(serde_json::from_reader(reader)?)
             }
-        } else {
-            Err(Error::new(ErrorKind::NotFound, "Path does not exist"))
+
+            return Err(Error::new(ErrorKind::Other, "File either doesn't exists or not a file"))
         }
+
+        return Err(Error::new(ErrorKind::NotADirectory, "Path is not a directory"))
     }
 
     /// Get the filesystem path for a given NgPre data path.
-    fn get_path(&self, path_name: &str) -> Result<PathBuf> {
+    fn get_path(&self, path_name: &str) -> io::Result<PathBuf> {
         // Note: cannot use `canonicalize` on both the constructed dataset path
         // and `base_path` and check `starts_with`, because `canonicalize` also
         // requires the path exist.
         use std::path::{Component, Path};
+        use io::{Error, ErrorKind};
 
         // Normalize the path to be relative.
         let mut components = Path::new(path_name).components();
@@ -128,7 +100,7 @@ impl NgPreFilesystem {
                     "Path name is outside this NgPre filesystem on a prefix path")),
                 Some(Component::RootDir) => (),
                 // This should be unreachable.
-                _ => return Err(Error::new(ErrorKind::NotFound, "Path is malformed")),
+                _ => return Err(Error::new(ErrorKind::Other, "Path is malformed")),
             }
         }
         let unrooted_path = components.as_path();
@@ -146,13 +118,13 @@ impl NgPreFilesystem {
         }
 
         if nest < 0 {
-            Err(Error::new(ErrorKind::NotFound, "Path name is outside this NgPre filesystem"))
-        } else {
-            Ok(self.base_path.join(unrooted_path))
+            return Err(Error::new(ErrorKind::NotFound, "Path name is outside this NgPre filesystem"))
         }
+
+        Ok(self.base_path.join(unrooted_path))
     }
 
-    fn get_data_block_path(&self, path_name: &str, grid_position: &[u64]) -> Result<PathBuf> {
+    fn get_data_block_path(&self, path_name: &str, grid_position: &[u64]) -> io::Result<PathBuf> {
         let mut path = self.get_path(path_name)?;
         for coord in grid_position {
             path.push(coord.to_string());
@@ -160,7 +132,8 @@ impl NgPreFilesystem {
         Ok(path)
     }
 
-    fn get_attributes_path(&self, path_name: &str) -> Result<PathBuf> {
+    /// Get the `FILE PATH` of the **ATTRIBUTES FILE**
+    fn get_attributes_path(&self, path_name: &str) -> io::Result<PathBuf> {
         let mut path = self.get_path(path_name)?;
         path.push(ATTRIBUTES_FILE);
         Ok(path)
@@ -168,28 +141,37 @@ impl NgPreFilesystem {
 }
 
 impl NgPreReader for NgPreFilesystem {
-    fn get_version(&self) -> Result<Version> {
-        // TODO: dedicated error type should clean this up.
-        Ok(Version::from_str(self
-                .get_attributes("")?
-                .get(crate::VERSION_ATTRIBUTE_KEY)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound, "Version attribute not present"))?
-                .as_str().unwrap_or("")
-            ).unwrap())
+    // TODO: dedicated error type should clean this up.
+    /// Get the NgPre specification version of the container.
+    /// This function may **panic** if failed to parse the `string` into `Version`
+    fn get_version(&self) -> io::Result<Version> {
+        use io::{Error, ErrorKind};
+
+        let attrs = self.get_attributes("")?;
+        if attrs.is_array() {
+            let version = attrs.get(crate::VERSION_ATTRIBUTE_KEY).ok_or_else(|| Error::new(ErrorKind::NotFound, "Version attribute not present"))?;
+            let ret = Version::from_str(version.as_str().unwrap_or_default()).expect("failed to parse the string into the version");
+            return Ok(ret)
+        }
+
+        Err(Error::new(ErrorKind::Other, "attribute isn't an array"))
     }
 
-    fn get_dataset_attributes(&self, path_name: &str) -> Result<DatasetAttributes> {
+    fn get_dataset_attributes(&self, path_name: &str) -> io::Result<DatasetAttributes> {
         let attr_path = self.get_attributes_path(path_name)?;
         let reader = BufReader::new(File::open(attr_path)?);
         Ok(serde_json::from_reader(reader)?)
     }
 
-    fn exists(&self, path_name: &str) -> Result<bool> {
-        let target = self.get_path(path_name)?;
-        Ok(target.is_dir())
+    /// Check if `PATH` exists for NGPRE dataset
+    fn exists(&self, path: &str) -> io::Result<bool> {
+        let target = self.get_path(path)?;
+        target.try_exists()
     }
 
-    fn get_block_uri(&self, path_name: &str, grid_position: &[u64]) -> Result<String> {
+    fn get_block_uri(&self, path_name: &str, grid_position: &[u64]) -> io::Result<String> {
+        use io::{Error, ErrorKind};
+
         self.get_data_block_path(path_name, grid_position)?.to_str()
             // TODO: could use URL crate and `from_file_path` here.
             .map(|s| format!("file://{}", s))
@@ -201,21 +183,19 @@ impl NgPreReader for NgPreFilesystem {
         path_name: &str,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
-    ) -> Result<Option<VecDataBlock<T>>>
-            where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock,
-                  T: ReflectedType {
+    ) -> io::Result<Option<VecDataBlock<T>>>
+    where
+        VecDataBlock<T>: DataBlock<T> + ReadableDataBlock,
+        T: ReflectedType
+    {
         let block_file = self.get_data_block_path(path_name, &grid_position)?;
         if block_file.is_file() {
             let file = File::open(block_file)?;
-            file.lock_shared()?;
             let reader = BufReader::new(file);
-            Ok(Some(<crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block(
-                reader,
-                data_attrs,
-                grid_position)?))
-        } else {
-            Ok(None)
+            return Ok(Some(crate::DefaultBlock::read_block(reader, data_attrs, grid_position)?))
         }
+
+        Ok(None)
     }
 
     fn read_block_into<T: ReflectedType, B: DataBlock<T> + ReinitDataBlock<T> + ReadableDataBlock>(
@@ -224,21 +204,16 @@ impl NgPreReader for NgPreFilesystem {
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
         block: &mut B,
-    ) -> Result<Option<()>> {
+    ) -> io::Result<Option<()>> {
         let block_file = self.get_data_block_path(path_name, &grid_position)?;
         if block_file.is_file() {
             let file = File::open(block_file)?;
-            file.lock_shared()?;
             let reader = BufReader::new(file);
-            <crate::DefaultBlock as DefaultBlockReader<T, _>>::read_block_into(
-                reader,
-                data_attrs,
-                grid_position,
-                block)?;
-            Ok(Some(()))
-        } else {
-            Ok(None)
+            crate::DefaultBlock::read_block_into(reader, data_attrs, grid_position, block)?;
+            return Ok(Some(()))
         }
+
+        Ok(None)
     }
 
     fn block_metadata(
@@ -246,7 +221,7 @@ impl NgPreReader for NgPreFilesystem {
         path_name: &str,
         _data_attrs: &DatasetAttributes,
         grid_position: &[u64],
-    ) -> Result<Option<DataBlockMetadata>> {
+    ) -> io::Result<Option<DataBlockMetadata>> {
         let block_file = self.get_data_block_path(path_name, grid_position)?;
         if block_file.is_file() {
             let metadata = std::fs::metadata(block_file)?;
@@ -262,32 +237,27 @@ impl NgPreReader for NgPreFilesystem {
     }
 
     // TODO: dupe with get_attributes w/ different empty behaviors
-    fn list_attributes(&self, path_name: &str) -> Result<Value> {
+    fn list_attributes(&self, path_name: &str) -> io::Result<Value> {
         let attr_path = self.get_attributes_path(path_name)?;
         let file = File::open(attr_path)?;
-        file.lock_shared()?;
         let reader = BufReader::new(file);
         Ok(serde_json::from_reader(reader)?)
     }
 }
 
 impl NgPreLister for NgPreFilesystem {
-    fn list(&self, path_name: &str) -> Result<Vec<String>> {
-        // TODO: shouldn't do this in a closure to not equivocate errors with Nones.
-        Ok(fs::read_dir(self.get_path(path_name)?)?
-            .filter_map(|e| {
-                if let Ok(file) = e {
-                    if fs::metadata(file.path()).map(|f| f.file_type().is_dir()).ok() == Some(true) {
-                        file.file_name().into_string().ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect()
-        )
+    fn list(&self, path_name: &str) -> io::Result<Vec<String>> {
+        let dir_reader = fs::read_dir(self.get_path(path_name)?)?;
+        let mut dir_names: Vec<String> = Vec::new();
+
+        for dir in dir_reader {
+            let dir = dir?;
+            if dir.path().is_dir() {
+                dir_names.push(dir.file_name().to_str().unwrap_or_default().to_string());
+            }
+        }
+
+        Ok(dir_names)
     }
 }
 
@@ -309,13 +279,12 @@ impl NgPreWriter for NgPreFilesystem {
         &self,
         path_name: &str,
         attributes: serde_json::Map<String, Value>,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let mut file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(self.get_attributes_path(path_name)?)?;
-        file.lock_exclusive()?;
 
         let mut existing_buf = String::new();
         file.read_to_string(&mut existing_buf)?;
@@ -334,7 +303,7 @@ impl NgPreWriter for NgPreFilesystem {
         Ok(())
     }
 
-    fn create_group(&self, path_name: &str) -> Result<()> {
+    fn create_group(&self, path_name: &str) -> io::Result<()> {
         let path = self.get_path(path_name)?;
         fs::create_dir_all(path)
     }
@@ -342,22 +311,9 @@ impl NgPreWriter for NgPreFilesystem {
     fn remove(
         &self,
         path_name: &str,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let path = self.get_path(path_name)?;
-
-        for entry in WalkDir::new(path).contents_first(true) {
-            let entry = entry?;
-
-            if entry.file_type().is_dir() {
-                fs::remove_dir(entry.path())?;
-            } else {
-                let file = File::open(entry.path())?;
-                file.lock_exclusive()?;
-                fs::remove_file(entry.path())?;
-            }
-        }
-
-        Ok(())
+        fs::remove_dir_all(path)
     }
 
     fn write_block<T: ReflectedType, B: DataBlock<T> + WriteableDataBlock>(
@@ -365,7 +321,7 @@ impl NgPreWriter for NgPreFilesystem {
         path_name: &str,
         data_attrs: &DatasetAttributes,
         block: &B,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let path = self.get_data_block_path(path_name, block.get_grid_position())?;
         fs::create_dir_all(path.parent().expect("TODO: root block path?"))?;
 
@@ -373,30 +329,21 @@ impl NgPreWriter for NgPreFilesystem {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(path)?;
-        file.lock_exclusive()?;
-        // Truncate after the lock is acquired, rather than on opening.
-        file.set_len(0)?;
 
         let buffer = BufWriter::new(file);
-        <crate::DefaultBlock as DefaultBlockWriter<T, _, _>>::write_block(
-                buffer,
-                data_attrs,
-                block)
+        crate::DefaultBlock::write_block(buffer, data_attrs, block)
     }
 
     fn delete_block(
         &self,
         path_name: &str,
         grid_position: &[u64],
-    ) -> Result<bool> {
+    ) -> io::Result<bool> {
         let path = self.get_data_block_path(path_name, grid_position)?;
 
         if path.exists() {
-            let file = fs::OpenOptions::new()
-                .read(true)
-                .open(&path)?;
-            file.lock_exclusive()?;
             fs::remove_file(&path)?;
         }
 
