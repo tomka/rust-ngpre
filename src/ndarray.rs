@@ -1,47 +1,21 @@
 use std::cmp;
-use std::io::{
-    Error,
-    ErrorKind,
-};
-use std::ops::{
-    Sub,
-};
+use std::io::{Error, ErrorKind};
+use std::ops::Sub;
 
 use itertools::Itertools;
-use ndarray::{
-    Array,
-    ArrayView,
-    IxDyn,
-    ShapeBuilder,
-    SliceInfo,
-};
+use ndarray::{Array, ArrayView, IxDyn, ShapeBuilder, SliceInfo};
 
 use crate::{
-    BlockCoord,
-    CoordVec,
-    DataBlock,
-    DatasetAttributes,
-    GridCoord,
-    NgPreReader,
-    NgPreWriter,
-    ReadableDataBlock,
-    ReflectedType,
-    ReinitDataBlock,
-    SliceDataBlock,
-    VecDataBlock,
+    BlockCoord, CoordVec, DataBlock, DatasetAttributes, GridCoord, NgPreReader, NgPreWriter,
+    ReadableDataBlock, ReflectedType, ReinitDataBlock, SliceDataBlock, VecDataBlock,
     WriteableDataBlock,
 };
 
 use smallvec::SmallVec;
 
 pub mod prelude {
-    pub use super::{
-        BoundingBox,
-        NgPreNdarrayReader,
-        NgPreNdarrayWriter,
-    };
+  pub use super::{BoundingBox, NgPreNdarrayReader, NgPreNdarrayWriter};
 }
-
 
 /// Specifes the extents of an axis-aligned bounding box.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -369,16 +343,16 @@ impl<T: NgPreWriter> NgPreNdarrayWriter for T {}
 
 
 impl DatasetAttributes {
-    pub fn coord_iter(&self, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
+    pub fn coord_iter(&self, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> {
         let coord_ceil = self.get_dimensions(zoom_level).iter()
             .zip(self.get_block_size(zoom_level).iter())
-            .map(|(&d, &s)| (d + u64::from(s) - 1) / u64::from(s))
+            .map(|(&d, &s)| d.div_ceil(u64::from(s)))
             .collect::<GridCoord>();
 
         CoordIterator::new(&coord_ceil)
     }
 
-    pub fn bounded_coord_iter(&self, bbox: &BoundingBox, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> + ExactSizeIterator {
+    pub fn bounded_coord_iter(&self, bbox: &BoundingBox, zoom_level: usize) -> impl Iterator<Item = Vec<u64>> {
         let floor_coord: GridCoord = bbox.offset.iter()
             .zip(self.get_block_size(zoom_level).iter())
             .map(|(&o, &bs)| o / u64::from(bs))
@@ -386,7 +360,7 @@ impl DatasetAttributes {
         let ceil_coord: GridCoord = bbox.offset.iter()
             .zip(&bbox.size)
             .zip(self.get_block_size(zoom_level).iter().cloned().map(u64::from))
-            .map(|((&o, &s), bs)| (o + s + bs - 1) / bs)
+            .map(|((&o, &s), bs)| (o + s).div_ceil(bs))
             .collect();
 
         CoordIterator::floor_ceil(&floor_coord, &ceil_coord)
@@ -469,9 +443,7 @@ impl<T: Iterator<Item = Vec<u64>>> Iterator for CoordIterator<T> {
     }
 }
 
-impl<T: Iterator<Item = Vec<u64>>> ExactSizeIterator for CoordIterator<T> {
-}
-
+impl<T: Iterator<Item = Vec<u64>>> ExactSizeIterator for CoordIterator<T> {}
 
 #[cfg(test)]
 pub(crate) mod tests {

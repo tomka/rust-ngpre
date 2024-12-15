@@ -8,10 +8,7 @@ use serde::{
     Serialize,
 };
 
-use super::{
-    Compression,
-};
-
+use super::Compression;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
