@@ -214,7 +214,7 @@ impl ShardingSpecification {
         shard_bits: u64,
         minishard_index_encoding: MinishardIndexEncoding,
         data_encoding: ShardingChunkDataEncoding,
-    ) -> ShardingSpecification {
+    ) -> Self {
 
         let mut spec = ShardingSpecification {
             sharding_type,
@@ -259,8 +259,8 @@ impl ShardingSpecification {
 
         let mut minishard_mask: u64 = 1;
         for _ in 0..(val - 1) {
-            minishard_mask = minishard_mask << 1_u64;
-            minishard_mask = minishard_mask | 1_u64;
+            minishard_mask <<= 1_u64;
+            minishard_mask |= 1_u64;
         }
         minishard_mask
     }
@@ -309,12 +309,12 @@ impl ShardingSpecification {
         let width = self.shard_bits.div_ceil(4) as usize;
         let normalized_shard_number = format!("{:01$x}", shard_number, width);
 
-        let remainder = chunkid >> self.minishard_bits + self.shard_bits;
+        let remainder = chunkid >> (self.minishard_bits + self.shard_bits);
 
         ShardLocation {
             shard_number: normalized_shard_number,
-            minishard_number: minishard_number,
-            remainder: remainder
+            minishard_number,
+            remainder
         }
     }
 }
@@ -573,8 +573,8 @@ impl DatasetAttributes {
         r#type: DatasetType,
         scales: Vec<ScaleEntry>,
         num_channels: u32,
-    ) -> DatasetAttributes {
-        DatasetAttributes {
+    ) -> Self {
+        Self {
             data_type,
             r#type,
             scales,
@@ -1379,7 +1379,7 @@ struct BundleSubrange {
 }
 
 #[derive(Clone, Debug)]
-struct ShardingBundle {
+pub struct ShardingBundle {
     path: String,
     start: u64,
     end: u64,
@@ -1387,7 +1387,8 @@ struct ShardingBundle {
     subranges: Vec<BundleSubrange>,
 }
 
-struct BundleDetails {
+#[derive(Debug)]
+pub struct BundleDetails {
     path: String,
     byte_range_start: u64,
     byte_range_end: u64,
@@ -1465,10 +1466,10 @@ impl<'a> ShardReader<'a> {
     ) -> Self {
 
         Self {
-            meta: meta,
-            cache: cache,
-            spec: spec,
-            data_loader: data_loader,
+            meta,
+            cache,
+            spec,
+            data_loader,
             shard_index_cache: LruCache::new(
                 shard_index_cache_size.unwrap_or(NonZeroUsize::new(512).unwrap())),
             minishard_index_cache: LruCache::new(
@@ -1594,6 +1595,7 @@ impl<'a> ShardReader<'a> {
         return results
         return first(results.values())
     */
+
     /// Fetches data from shards.
     ///
     /// label: one or more segment ids
@@ -1798,7 +1800,7 @@ impl<'a> ShardReader<'a> {
     ///     return OUTPUT
     /// Else:
     ///     return { label_1: OUTPUT, label_2: OUTPUT, ... }
-    pub async fn exists(&mut self, labels: &Vec<u64>, path_desc: Option<&'a str>, return_byte_range: Option<bool>,
+    pub async fn exists(&mut self, labels: &[u64], path_desc: Option<&'a str>, return_byte_range: Option<bool>,
             progress:Option<bool>) -> HashMap<u64, Option<(String, u64, u64)>> {
 
         let path = path_desc.unwrap_or("");
@@ -1808,7 +1810,7 @@ impl<'a> ShardReader<'a> {
         let mut filename_to_minishard_num: HashMap<String, Vec<u64>> = HashMap::new();
 
 
-        let mut unique_labels: Vec<u64> = labels.clone();
+        let mut unique_labels: Vec<u64> = labels.to_owned();
         let mut unique_label_set = HashSet::new();
         unique_labels.retain(|e| unique_label_set.insert(*e));
         console::log_1(&format!("exists: unique_label_set {}", unique_label_set.iter().format(", ")).into());
@@ -2087,7 +2089,7 @@ impl<'a> ShardReader<'a> {
         let mut download_requests: Vec<IndexFileDetails> = Vec::new();
         for (filename, index, minishard_nos) in requests {
             let (fulfilled_requests, pending_requests) = self.compute_minishard_index_requests(
-                filename.clone(), &index, &minishard_nos, path);
+                filename.clone(), &index, minishard_nos, path);
             fulfilled_by_filename.insert(filename.to_string(), fulfilled_requests);
             for (msn, start, end) in pending_requests {
                 msn_map.insert((basename(filename), start, end), msn);
@@ -2095,8 +2097,8 @@ impl<'a> ShardReader<'a> {
                 download_requests.push(IndexFileDetails {
                     path: filepath.clone(),
                     local_alias: format!("{filepath}-{msn}.msi"),
-                    start: start,
-                    end: end,
+                    start,
+                    end,
                 });
             }
         }
@@ -2153,7 +2155,7 @@ impl<'a> ShardReader<'a> {
     /// Helper method for get_minishard_indices_for_files.
     /// Computes which requests must be made over the network vs can be fufilled from LRU cache.
     pub fn compute_minishard_index_requests(&mut self, filename: String, index: &Option<Vec<(u64, u64)>>,
-            minishard_nos: &Vec<u64>, path: Option<&str>)
+            minishard_nos: &[u64], path: Option<&str>)
             -> (HashMap<u64, Option<Vec<(u64, u64, u64)>>>, Vec<(u64, u64, u64)>) {
 
         let mut fulfilled_requests: HashMap<u64, Option<Vec<(u64, u64, u64)>>> = HashMap::new();
@@ -2232,7 +2234,7 @@ impl<'a> ShardReader<'a> {
             };
 
         let mut index: Vec<u64> = vec![0; minishard_index.len().div_floor(8)]; // buffer length / 8 = 8
-        u8_to_u64_array(&minishard_index, &mut index);
+        u8_to_u64_array(minishard_index, &mut index);
 
         let mut decoded_minishard_index: Vec<(u64, u64, u64)> = Vec::new();
         for i in 0..(minishard_index.len().div_floor(3)) {
