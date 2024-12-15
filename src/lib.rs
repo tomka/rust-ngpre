@@ -926,7 +926,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
 
         // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
         // smaller blocks on the edges.
-        let _ = block.read_data(&mut decompressed);
+        block.read_data(&mut decompressed)?;
         Ok(block)
     }
 
