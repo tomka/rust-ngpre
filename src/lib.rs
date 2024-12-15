@@ -882,7 +882,7 @@ impl<T: ReflectedType, C: AsRef<[T]>> DataBlock<T> for SliceDataBlock<T, C> {
 const BLOCK_FIXED_LEN: u16 = 0;
 const BLOCK_VAR_LEN: u16 = 1;
 
-// https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/volume.md#chunk-encoding
+// https://github.com/google/neuroglancer/blob/master/src/datasource/precomputed/volume.md#chunk-encoding
 pub trait DefaultBlockHeaderReader<R: io::Read> {
     fn read_block_header(
         grid_position: GridCoord,
