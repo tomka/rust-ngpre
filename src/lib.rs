@@ -924,8 +924,6 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         let mut block = T::create_data_block(header);
         let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
 
-        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
-        // smaller blocks on the edges.
         block.read_data(&mut decompressed)?;
         Ok(block)
     }
@@ -949,11 +947,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         block.reinitialize(header);
         let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
 
-        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
-        // smaller blocks on the edges.
-        let _ = block.read_data(&mut decompressed);
-
-        Ok(())
+        block.read_data(&mut decompressed)
     }
 }
 
@@ -987,9 +981,7 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: io::Write, B: DataBlock<T> + W
         }
 
         let mut compressor = data_attrs.get_compression(zoom_level).encoder(buffer);
-        block.write_data(&mut compressor)?;
-
-        Ok(())
+        block.write_data(&mut compressor)
     }
 }
 
