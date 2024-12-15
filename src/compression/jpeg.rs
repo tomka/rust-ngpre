@@ -5,9 +5,7 @@ use serde::{
     Serialize,
 };
 
-use super::{
-    Compression,
-};
+use super::Compression;
 
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -20,10 +18,9 @@ pub struct JpegCompression {
 impl JpegCompression {
     fn get_effective_quality(&self) -> u32 {
         if self.quality < 0 || self.quality > 100 {
-            90
-        } else {
-            self.quality as u32
+            return 90
         }
+        self.quality as u32
     }
 }
 
