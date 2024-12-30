@@ -924,7 +924,9 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         let mut block = T::create_data_block(header);
         let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
 
-        block.read_data(&mut decompressed)?;
+        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
+        // smaller blocks on the edges.
+        let _ = block.read_data(&mut decompressed);
         Ok(block)
     }
 
