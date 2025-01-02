@@ -1470,7 +1470,6 @@ impl<'a> CloudFiles<'a> {
 
 impl fmt::Display for CloudFiles<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        //write!(f, "ShardReader ({}, {})", self.0, self.1)
         write!(f, "CloudFiles (path: {:?})", self.path)
     }
 }
@@ -2300,8 +2299,7 @@ impl<'a> ShardReader<'a> {
 
 impl fmt::Display for ShardReader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        //write!(f, "ShardReader ({}, {})", self.0, self.1)
-        write!(f, "ShardReader")
+        write!(f, "ShardReader (Path: {}, Cache: {})", self.meta.cloudpath, self.cache.enabled)
     }
 }
 
