@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::io::{self, Read};
+use std::cmp;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -987,27 +988,54 @@ pub trait DefaultBlockWriter<T: ReflectedType, W: io::Write, B: DataBlock<T> + W
     }
 }
 
-/*
-def gridpoints(bbox, volume_bbox, chunk_size):
-  chunk_size = Vec(*chunk_size)
-
-  grid_size = np.ceil(volume_bbox.size3() / chunk_size).astype(np.int64)
-  cutout_grid_size = np.ceil(bbox.size3() / chunk_size).astype(np.int64)
-  cutout_grid_offset = np.ceil((bbox.minpt - volume_bbox.minpt) / chunk_size).astype(np.int64)
-
-  grid_cutout = Bbox( cutout_grid_offset, cutout_grid_offset + cutout_grid_size )
-
-  for x,y,z in xyzrange( grid_cutout.minpt, grid_cutout.maxpt, (1,1,1) ):
-    yield Vec(x,y,z)
-*/
+//def gridpoints(bbox, volume_bbox, chunk_size):
+//  chunk_size = Vec(*chunk_size)
+//
+//  # TODO: Mention upstream this line is not needed
+//  grid_size = np.ceil(volume_bbox.size3() / chunk_size).         astype(np.int64)
+//  cutout_grid_size = np.ceil(bbox.size3() / chunk_size).         astype(np.int64)
+//  cutout_grid_offset = np.ceil((bbox.minpt - volume_bbox.        minpt) / chunk_size).astype(np.int64)
+//
+//  grid_cutout = Bbox( cutout_grid_offset, cutout_grid_offset +   cutout_grid_size )
+//
+//  for x,y,z in xyzrange( grid_cutout.minpt, grid_cutout.maxpt,   (1,1,1) ):
+//    yield Vec(x,y,z)
+//
 /// Consider a volume as divided into a grid with the
 /// first chunk labeled 1, the second 2, etc.
 ///
 /// Return the grid x,y,z coordinates of a cutout as a
 /// sequence.
-pub fn gridpoints(bbox: BBox<GridCoord>, volume_bbox: BBox<GridCoord>, chunk_size: ChunkSize) -> Vec<(u64, u64, u64)> {
+pub fn gridpoints(bbox: &BBox<GridCoord>, volume_bbox: &BBox<GridCoord>, chunk_size: &ChunkSize) -> Vec<GridCoord> {
+    //let grid_size = bbox_size(volume_bbox).iter().zip(chunk_size).map(|(v, s)| ((*v as f64) / (*s as f64)).ceil() as i64).collect();
+    let cutout_grid_size: Vec<u64> = bbox_size(bbox).iter().zip(chunk_size).map(|(v, s)| ((*v as f64) / (*s as f64)).ceil() as u64).collect();
+    let cutout_grid_offset: Vec<u64> = bbox_minpt(bbox).iter().zip(bbox_minpt(volume_bbox)).zip(chunk_size).map(|((b, v), s)| (((b - v) as f64) / (*s as f64)).ceil() as u64).collect();
 
-	Vec::new()
+    let mut grid_cutout = BBox::new();
+    let max_grid_pt = cutout_grid_offset.iter().zip(cutout_grid_size).map(|(s, o)| s + o).collect();
+    grid_cutout.push( cutout_grid_offset );
+    grid_cutout.push( max_grid_pt );
+
+    let mut grid_points: Vec<GridCoord> = Vec::new();
+    for x in grid_cutout[0][0]..grid_cutout[1][0] {
+        for y in grid_cutout[0][1]..grid_cutout[1][1] {
+            for z in grid_cutout[0][2]..grid_cutout[1][2] {
+                grid_points.push(GridCoord::from_vec(vec![x, y, z]))
+            }
+        }
+    }
+
+    console::log_1(&format!("grid bbox: {:?}, grid points: {:?}", grid_cutout.iter().format(", "), grid_points.iter().format(", ")).into());
+
+    grid_points
+}
+
+fn bbox_size(bbox: &BBox<GridCoord>) -> GridCoord {
+    bbox[0].iter().zip(bbox[1].iter()).map(|(a,b)| b - a).collect()
+}
+
+fn bbox_minpt(bbox: &BBox<GridCoord>) -> GridCoord {
+    bbox[0].iter().zip(bbox[1].iter()).map(|(a,b)| *(cmp::min(a, b))).collect()
 }
 
 // gridpt: a list of 3d index locations in the grid of chunks (e.g. [(1,1,1)]
