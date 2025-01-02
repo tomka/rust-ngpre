@@ -304,13 +304,21 @@ impl ShardingSpecification {
 
     pub fn compute_shard_location(&self, key:u64) -> ShardLocation {
         let shifted_chunkid = key >> self.preshift_bits;
+        console::log_1(&format!("shifted_chunkid: {:?}", shifted_chunkid).into());
         let chunkid = self.hashfn(shifted_chunkid);
+        console::log_1(&format!("chunkid: {:?}", chunkid).into());
         let minishard_number = chunkid & self.minishard_mask;
+        console::log_1(&format!("minishard_bits {:?}", self.minishard_bits).into());
+        console::log_1(&format!("minishard_number: {:?}", minishard_number).into());
         let shard_number = (chunkid & self.shard_mask) >> self.minishard_bits;
+        console::log_1(&format!("shard_number: {:?}", shard_number).into());
         // Lower case hex formatting of shard_number and zfill with zeros for a total length of a
         // quarter of the shard_bits.
         let width = self.shard_bits.div_ceil(4) as usize;
+        console::log_1(&format!("shard_bits: {:?}", self.shard_bits).into());
+        console::log_1(&format!("width: {:?}", width).into());
         let normalized_shard_number = format!("{:01$x}", shard_number, width);
+        console::log_1(&format!("normalized_shard_number: {:?}", normalized_shard_number).into());
 
         let remainder = chunkid >> (self.minishard_bits + self.shard_bits);
 
@@ -1052,6 +1060,7 @@ pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> 
     }
 
     let mut code: Vec<u64> = vec![0; gridpt.len()];
+    console::log_1(&format!("compressed_morton_code: code [{:?}], gridpt.len: {:?}", code.iter().format(", "), gridpt.len()).into());
     let num_bits: Vec<usize> = grid_size.iter().map(|&size| (size as f64).log(2.0).ceil() as usize).collect();
     let mut j: u64 = 0;
     let one: u64 = 1;
@@ -1328,6 +1337,8 @@ impl CacheService<'_> {
         for (key, content) in remote_fragments_bytes.iter() {
             fragments.insert(key.clone(), content.clone());
         }
+
+        console::log_1(&format!("download_as: fragments: {:?}", fragments).into());
 
         fragments
     }
@@ -1727,11 +1738,13 @@ impl<'a> ShardReader<'a> {
                     slice_end: (chunk.end - last_bundle_start) as usize,
                 })
         }
+        console::log_1(&format!("ShardReader: bundles {:?}", bundles.iter().format(", ")).into());
 
         // Responses are not guaranteed to be in order of requests
         let bundles_resp_list = CloudFiles::new(
             data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
         ).get(&bundles).await;
+        console::log_1(&format!("ShardReader: bundles_resp_list {:?}", bundles_resp_list.iter().format(", ")).into());
 
         let mut bundles_resp = HashMap::new();
         for r in bundles_resp_list.iter() {
@@ -1753,6 +1766,7 @@ impl<'a> ShardReader<'a> {
                 }
             }
         }
+        console::log_1(&format!("ShardReader: binaries {:?}", binaries.iter().format(", ")).into());
 
         // TODO: Optional decode
         if !is_raw {
@@ -1910,6 +1924,7 @@ impl<'a> ShardReader<'a> {
             }
         }
 
+        console::log_1(&format!("exists: results {:?}", results.iter().format(", ")).into());
         results
     }
 
@@ -2007,6 +2022,7 @@ impl<'a> ShardReader<'a> {
         console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
         for ((fname, b, c), content) in binaries.iter() {
             let index = self.decode_index(content, Some(fname.clone()));
+            console::log_1(&format!("get_indices: decoded index {:?}", index).into());
             if index.is_ok() {
                 let unwrapped_index = index.unwrap();
                 self.shard_index_cache.put(fname.clone(), Some(unwrapped_index.clone()));
@@ -2140,13 +2156,18 @@ impl<'a> ShardReader<'a> {
             }
         }
 
-        let load_results = self.cache.download_as(download_requests, progress);
+        console::log_1(&format!("get_minishard_indices_for_files: download_requests {:?}", download_requests.iter().format(", ")).into());
+        let load_results = self.cache.download_as(download_requests, progress).await;
+        console::log_1(&format!("get_minishard_indices_for_files: load_results {:?}", load_results).into());
+        console::log_1(&format!("get_minishard_indices_for_files: msn_map {:?}", msn_map).into());
 
-        for ((full_filename, start, end), content) in load_results.await.into_iter() {
+        for ((full_filename, start, end), content) in load_results.into_iter() {
             let filename = basename(&full_filename);
             let cache_key = (filename.clone(), start, end);
             let msn = msn_map.get(&cache_key).unwrap();
+            console::log_1(&format!("get_minishard_indices_for_files: msn {:?}", msn).into());
             let minishard_index = self.decode_minishard_index(&content, &Some(filename.clone()));
+            console::log_1(&format!("get_minishard_indices_for_files: minishard index {:?}", minishard_index).into());
             self.minishard_index_cache.put(cache_key, Some(minishard_index.clone()));
 
             fulfilled_by_filename.get_mut(&filename).unwrap()
@@ -2257,6 +2278,7 @@ impl<'a> ShardReader<'a> {
     /// Returns [[label, offset, size], ... ] where offset and size are in bytes.
     pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, filename: &Option<String>)
             -> Vec<(u64, u64, u64)> {
+        console::log_1(&format!("decode_minishard_index: bytes: {:?}, filename: {:?} encoding: {:?}", minishard_index_bytes, filename, self.spec.minishard_index_encoding).into());
 
         let mut decompressed: Vec<u8> = Vec::new();
         let minishard_index = if self.spec.minishard_index_encoding == MinishardIndexEncoding::Raw {
@@ -2297,6 +2319,8 @@ impl<'a> ShardReader<'a> {
             val.1 = offset_cumsum;
         }
 
+        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
+
         let mut size_cumsum = 0;
         for i in 1..decoded_minishard_index.len() {
             size_cumsum += decoded_minishard_index[i-1].2;
@@ -2307,6 +2331,8 @@ impl<'a> ShardReader<'a> {
         for i in 0..decoded_minishard_index.len() {
             decoded_minishard_index[i].1 += spec_len;
         }
+
+        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
 
         decoded_minishard_index
     }
