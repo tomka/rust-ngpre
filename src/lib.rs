@@ -399,7 +399,8 @@ pub fn u8_to_u64_array(
     let n = result.len();
     let (result, array) = (&mut result[..n], &array.as_chunks().0[..n]);
     for i in 0..n {
-        result[i] = u64::from_be_bytes(array[i]);
+        // Neuroglancer Precomputed uses little endian
+        result[i] = u64::from_le_bytes(array[i]);
     }
 }
 
@@ -409,7 +410,8 @@ pub fn u64_to_u8_array(
 ) {
     let n = array.len();
     for i in 0..n {
-        result[4*i..4*(i+1)][..4].copy_from_slice(&array[i].to_be_bytes());
+        // Neuroglancer Precomputed uses little endian
+        result[4*i..4*(i+1)][..4].copy_from_slice(&array[i].to_le_bytes());
     }
 }
 
@@ -1252,53 +1254,55 @@ impl CacheService<'_> {
     */
     pub async fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>) -> HashMap<(String, u64, u64), Vec<u8>> {
 
-		if requests.is_empty() {
-			return HashMap::new();
-		}
+        if requests.is_empty() {
+        return HashMap::new();
+        }
 
-		let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
-		let mut alias_tuples: HashMap<String, (String, u64, u64)> = requests.iter()
-			.map(|req| (req.local_alias.clone(), (req.path.clone(), req.start, req.end))).collect();
-		let alias_to_path: HashMap<String, String> = requests.iter()
-			.map(|req| (req.local_alias.clone(), req.path.clone())).collect();
-		let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
-			.map(|(k,v)| (v.clone(),k.clone())).collect();
+        let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
+        let mut alias_tuples: HashMap<String, (String, u64, u64)> = requests.iter()
+        .map(|req| (req.local_alias.clone(), (req.path.clone(), req.start, req.end))).collect();
+        let alias_to_path: HashMap<String, String> = requests.iter()
+        .map(|req| (req.local_alias.clone(), req.path.clone())).collect();
+        let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
+        .map(|(k,v)| (v.clone(),k.clone())).collect();
 
-        console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
-        console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
-        console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
+            console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
+            console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
+            console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
 
-		// Check for None-entries in alias_to_path?
+        // Check for None-entries in alias_to_path?
 
-		let locs = self.compute_data_locations(&aliases);
-        console::log_1(&format!("download_as: locs: {:?}", locs).into());
+        let locs = self.compute_data_locations(&aliases);
+            console::log_1(&format!("download_as: locs: {:?}", locs).into());
 
-		let mut fragments: HashMap<(String, u64, u64), Vec<u8>> = HashMap::new();
+        let mut fragments: HashMap<(String, u64, u64), Vec<u8>> = HashMap::new();
 
-		if self.enabled {
-			let fragment_keys = self.get(&locs.local, progress);
-			for (key, result) in fragment_keys.into_iter() {
-				let return_key = (alias_to_path.get(&key).unwrap().clone(), alias_tuples.get(&key).unwrap().1,
-                    alias_tuples.get(&key).unwrap().2);
-				fragments.insert(return_key, result);
-			}
-			for alias in locs.local.iter() {
-				alias_tuples.remove(alias);
-			}
-		}
+        if self.enabled {
+        let fragment_keys = self.get(&locs.local, progress);
+        for (key, result) in fragment_keys.into_iter() {
+            let return_key = (alias_to_path.get(&key).unwrap().clone(), alias_tuples.get(&key).unwrap().1,
+                        alias_tuples.get(&key).unwrap().2);
+            fragments.insert(return_key, result);
+        }
+        for alias in locs.local.iter() {
+            alias_tuples.remove(alias);
+        }
+        }
 
-		let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
+        let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
+            console::log_1(&format!("download_as: remote_path_tuples: {:?}", remote_path_tuples).into());
 
         /*
-		let request_tuples: HashMap<(String, u64, u64)> = remote_path_tuples.iter()
-			.map(|p| vec![("path", p[0]), ("start", p[1]), ("end", p[2])])
-			.collect();
+        let request_tuples: HashMap<(String, u64, u64)> = remote_path_tuples.iter()
+        .map(|p| vec![("path", p[0]), ("start", p[1]), ("end", p[2])])
+        .collect();
         */
 
         let n_remote_path_tuples = remote_path_tuples.len();
 
         // Get a Future that retrieves the data
-		let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
+		    let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
+        console::log_1(&format!("download_as: load fragments: {:?}", load_fragments).into());
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
@@ -1868,7 +1872,8 @@ impl<'a> ShardReader<'a> {
         console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
 
         let requests = indices.iter()
-            .map(|(filepath, idx)| (basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
+            .map(|(filepath, idx)| (
+                basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
             .collect();
         let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress).await;
         console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
@@ -2260,21 +2265,28 @@ impl<'a> ShardReader<'a> {
                 if self.spec.minishard_index_encoding != MinishardIndexEncoding::Gzip {
                     unimplemented!();
                 }
+
                 let mut gz = GzDecoder::new(&minishard_index_bytes[..]);
                 let result = gz.read_to_end(&mut decompressed);
                 &decompressed
             };
 
+        console::log_1(&format!("decode_minishard_index: minishard index: {:?}", minishard_index).into());
         let mut index: Vec<u64> = vec![0; minishard_index.len().div_floor(8)]; // buffer length / 8 = 8
         u8_to_u64_array(minishard_index, &mut index);
+        console::log_1(&format!("decode_minishard_index: u64 version: {:?}", index).into());
 
         let mut decoded_minishard_index: Vec<(u64, u64, u64)> = Vec::new();
-        for i in 0..(minishard_index.len().div_floor(3)) {
+        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: len: {:?}, floor: {:?}, index len: {:?}", minishard_index.len(), minishard_index.len().div_floor(3), index.len()).into());
+        let dim_len = index.len().div_floor(3);
+        for i in 0..(dim_len) {
             decoded_minishard_index.push((
                     index[i],
-                    index[i+1],
-                    index[i+2]))
+                    index[dim_len + i],
+                    index[2 * dim_len + i]))
         }
+
+        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
 
         let mut label_cumsum = 0;
         let mut offset_cumsum = 0;
