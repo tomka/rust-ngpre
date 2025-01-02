@@ -44,6 +44,7 @@ jpeg-encoder = "0.6.0"
 lru = "0.12.3"
 murmur3 = "0.5.2"
 futures = "0.3"
+async-trait = "0.1.83"
 
 [dependencies.web-sys]
 version = "0.3"

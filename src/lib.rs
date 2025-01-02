@@ -18,6 +18,8 @@ doc_comment::doctest!("../README.md");
 #[macro_use]
 pub extern crate smallvec;
 
+use async_trait::async_trait;
+
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
@@ -1139,15 +1141,16 @@ fn path_join(paths: Vec<&str>) -> Option<String> {
 
 #[derive(Clone, Debug)]
 pub struct DataLoaderResult {
-    path: String,
-    byterange: Range<u64>,
-    content: Vec<u8>,
-    compress: String,
-    raw: bool,
+    pub path: String,
+    pub byterange: Range<u64>,
+    pub content: Vec<u8>,
+    pub compress: String,
+    pub raw: bool,
 }
 
+#[async_trait(?Send)]
 pub trait DataLoader {
-    fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
+    async fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
         -> HashMap<String, io::Result<DataLoaderResult>>;
 }
 
@@ -1295,7 +1298,7 @@ impl CacheService<'_> {
         let n_remote_path_tuples = remote_path_tuples.len();
 
         // Get a Future that retrieves the data
-		let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples);
+		let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
@@ -1456,7 +1459,7 @@ impl<'a> CloudFiles<'a> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
         let n_requet_bundles = request_bundles.len();
         console::log_1(&format!("CloudFiles.get (num bundles: {:?})", n_requet_bundles).into());
-		let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles);
+		let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles).await;
 
         load_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
             path: x.path,
