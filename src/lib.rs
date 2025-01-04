@@ -39,6 +39,7 @@ use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use web_sys::console;
+use zune_jpeg::JpegDecoder;
 
 pub mod compression;
 #[macro_use]
@@ -901,11 +902,27 @@ pub trait DefaultBlockHeaderReader<R: io::Read> {
         grid_position: GridCoord,
         data_attrs: &DatasetAttributes,
         zoom_level: usize,
+        limit_to_data_bounds: bool
     ) -> BlockHeader {
 
-        let bs = data_attrs.get_block_size(zoom_level);
+        let bs = if limit_to_data_bounds {
+            let bs = data_attrs.get_block_size(zoom_level);
+            let mut new_bs = bs.clone();
+            let bounds = data_attrs.bounds(zoom_level);
+            let new_bs = bs.iter().zip(bounds[1].clone()).map(|(a, b)| {
+                if i64::from(*a) > b {
+                    return b as u32;
+                }
+                return *a;
+            }).collect();
+            new_bs
+        } else {
+            data_attrs.get_block_size(zoom_level).to_vec()
+        };
+
         let nc = data_attrs.get_num_channels();
         let size = smallvec![bs[0], bs[1], bs[2], nc];
+
         let num_el: u32 = bs.iter().product();
 
         BlockHeader {
@@ -922,6 +939,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         buffer: R,
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
+        zoom_level: usize
     ) -> io::Result<VecDataBlock<T>>
     where VecDataBlock<T>: DataBlock<T> + ReadableDataBlock
     {
@@ -931,11 +949,15 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
                 "Attempt to create data block for wrong type."))
         }
 
-        let zoom_level = 0;
-        let header = Self::read_block_header(grid_position, data_attrs, zoom_level);
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level, true);
 
         let mut block = T::create_data_block(header);
-        let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
+        // Sharded data comes in de as i64compressed already
+        let mut decompressed = if data_attrs.is_sharded(zoom_level) {
+                compression::CompressionType::default().decoder(buffer)
+            } else {
+                data_attrs.get_compression(zoom_level).decoder(buffer)
+            };
 
         // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
         // smaller blocks on the edges.
@@ -948,6 +970,7 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         data_attrs: &DatasetAttributes,
         grid_position: GridCoord,
         block: &mut B,
+        zoom_level: usize
     ) -> io::Result<()> {
 
         if data_attrs.data_type != T::VARIANT {
@@ -955,12 +978,15 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
                 io::ErrorKind::InvalidInput,
                 "Attempt to create data block for wrong type."))
         }
-        // FIXME
-        let zoom_level = 0;
-        let header = Self::read_block_header(grid_position, data_attrs, zoom_level);
+        let header = Self::read_block_header(grid_position, data_attrs, zoom_level, true);
 
         block.reinitialize(header);
-        let mut decompressed = data_attrs.get_compression(zoom_level).decoder(buffer);
+        // Sharded data comes in decompressed already
+        let mut decompressed = if data_attrs.is_sharded(zoom_level) {
+                compression::CompressionType::default().decoder(buffer)
+            } else {
+                data_attrs.get_compression(zoom_level).decoder(buffer)
+            };
 
         block.read_data(&mut decompressed)
     }
@@ -1157,6 +1183,7 @@ pub struct DataLoaderResult {
     pub content: Vec<u8>,
     pub compress: String,
     pub raw: bool,
+    pub etag: Option<String>
 }
 
 #[async_trait(?Send)]
@@ -1261,7 +1288,7 @@ impl CacheService<'_> {
         fragments.update(remote_fragments)
         return fragments
     */
-    pub async fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>) -> HashMap<(String, u64, u64), Vec<u8>> {
+    pub async fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>) -> HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> {
 
         if requests.is_empty() {
         return HashMap::new();
@@ -1284,7 +1311,7 @@ impl CacheService<'_> {
         let locs = self.compute_data_locations(&aliases);
             console::log_1(&format!("download_as: locs: {:?}", locs).into());
 
-        let mut fragments: HashMap<(String, u64, u64), Vec<u8>> = HashMap::new();
+        let mut fragments: HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> = HashMap::new();
 
         if self.enabled {
         let fragment_keys = self.get(&locs.local, progress);
@@ -1321,12 +1348,12 @@ impl CacheService<'_> {
             }
         }
 
-        let remote_fragments_bytes: HashMap<(String, u64, u64), Vec<u8>> = load_fragments.into_values()
+        let remote_fragments_bytes: HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> = load_fragments.into_values()
             .map(|x| match x {
                 Err(why) => panic!("{:?}", why),
                 Ok(res) => res,
             })
-            .map(|x| ((x.path.clone(), x.byterange.start, x.byterange.end), x.content))
+            .map(|x| ((x.path.clone(), x.byterange.start, x.byterange.end), (x.content, x.etag)))
             .collect();
 
         if is_enabled {
@@ -1355,7 +1382,7 @@ impl CacheService<'_> {
         return cf.get(cloudpaths, return_dict=True)
     */
     /// Get data from cache
-    pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, Vec<u8>> {
+    pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, (Vec<u8>, Option<String>)> {
         // FIXME
         HashMap::new()
     }
@@ -1442,6 +1469,7 @@ pub struct BundleDetails {
     byte_range_end: u64,
     error: Option<String>,
     content: Vec<u8>,
+    pub etag: Option<String>
 }
 
 #[derive(Clone, Debug)]
@@ -1482,6 +1510,7 @@ impl<'a> CloudFiles<'a> {
             byte_range_end: x.byterange.end,
             error: None,
             content: x.content,
+            etag: x.etag
         }).collect()
     }
 }
@@ -1654,14 +1683,14 @@ impl<'a> ShardReader<'a> {
     /// Returns: map of label vs. bytestring
     ///
     pub async fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
-        parallel:Option<u32>, raw:Option<bool>) -> io::Result<HashMap<u64, Option<Vec<u8>>>>
+        parallel:Option<u32>, raw:Option<bool>) -> io::Result<HashMap<u64, Option<(Vec<u8>, Option<String>)>>>
     {
         console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
         let _path = path.unwrap_or("");
         let _parallel = parallel.unwrap_or(1);
         let is_raw = raw.unwrap_or(true);
 
-        let mut results: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+        let mut results: HashMap<u64, Option<(Vec<u8>, Option<String>)>> = HashMap::new();
 
         if labels.is_empty() {
             return Ok(results);
@@ -1751,7 +1780,7 @@ impl<'a> ShardReader<'a> {
             bundles_resp.insert( (r.path.clone(), r.byte_range_start, r.byte_range_end), r );
         }
 
-        let mut binaries: HashMap<u64, Option<Vec<u8>>> = HashMap::new();
+        let mut binaries: HashMap<u64, Option<(Vec<u8>, Option<String>)>> = HashMap::new();
         for bundle_req in bundles.iter() {
             let bundle_resp_item = bundles_resp.get(&(bundle_req.path.clone(), bundle_req.start, bundle_req.end));
             if bundle_resp_item.is_none() {
@@ -1762,7 +1791,7 @@ impl<'a> ShardReader<'a> {
                 for chunk in bundle_req.subranges.iter() {
                     let key = (bundle_req.path.clone(), chunk.start, chunk.length);
                     let lbl = key_label.get(&key).unwrap();
-                    binaries.insert(*lbl, Some(bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec()));
+                    binaries.insert(*lbl, Some((bundle_resp.content[chunk.slice_start..chunk.slice_end].to_vec(), bundle_resp.etag.clone())));
                 }
             }
         }
@@ -2020,7 +2049,7 @@ impl<'a> ShardReader<'a> {
         let load_binaries = self.cache.download_as(requests, Some(_progress));
         let binaries = load_binaries.await;
         console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
-        for ((fname, b, c), content) in binaries.iter() {
+        for ((fname, b, c), (content, etag)) in binaries.iter() {
             let index = self.decode_index(content, Some(fname.clone()));
             console::log_1(&format!("get_indices: decoded index {:?}", index).into());
             if index.is_ok() {
@@ -2161,7 +2190,7 @@ impl<'a> ShardReader<'a> {
         console::log_1(&format!("get_minishard_indices_for_files: load_results {:?}", load_results).into());
         console::log_1(&format!("get_minishard_indices_for_files: msn_map {:?}", msn_map).into());
 
-        for ((full_filename, start, end), content) in load_results.into_iter() {
+        for ((full_filename, start, end), (content, etag)) in load_results.into_iter() {
             let filename = basename(&full_filename);
             let cache_key = (filename.clone(), start, end);
             let msn = msn_map.get(&cache_key).unwrap();
@@ -2342,6 +2371,22 @@ impl fmt::Display for ShardReader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ShardReader (Path: {}, Cache: {})", self.meta.cloudpath, self.cache.enabled)
     }
+}
+
+pub fn decode(data: &Vec<u8>) -> Vec<u8> {
+    // FIXME: For now assume JPEG encoding
+    let mut decoder = JpegDecoder::new(data);
+    let decoded_data = decoder.decode().expect("JPEG decoding failed");
+
+    console::log_1(&format!("decoded data: {:?}", decoded_data).into());
+    console::log_1(&format!("decoded data len: {:?}", decoded_data.len()).into());
+
+    // shape = list(bbox.size3()) + [ meta.num_channels ]
+    // data.reshape(shape, order='F')
+    //let shape = vec![64,64,42,1];
+
+
+    decoded_data
 }
 
 
