@@ -305,21 +305,13 @@ impl ShardingSpecification {
 
     pub fn compute_shard_location(&self, key:u64) -> ShardLocation {
         let shifted_chunkid = key >> self.preshift_bits;
-        console::log_1(&format!("shifted_chunkid: {:?}", shifted_chunkid).into());
         let chunkid = self.hashfn(shifted_chunkid);
-        console::log_1(&format!("chunkid: {:?}", chunkid).into());
         let minishard_number = chunkid & self.minishard_mask;
-        console::log_1(&format!("minishard_bits {:?}", self.minishard_bits).into());
-        console::log_1(&format!("minishard_number: {:?}", minishard_number).into());
         let shard_number = (chunkid & self.shard_mask) >> self.minishard_bits;
-        console::log_1(&format!("shard_number: {:?}", shard_number).into());
         // Lower case hex formatting of shard_number and zfill with zeros for a total length of a
         // quarter of the shard_bits.
         let width = self.shard_bits.div_ceil(4) as usize;
-        console::log_1(&format!("shard_bits: {:?}", self.shard_bits).into());
-        console::log_1(&format!("width: {:?}", width).into());
         let normalized_shard_number = format!("{:01$x}", shard_number, width);
-        console::log_1(&format!("normalized_shard_number: {:?}", normalized_shard_number).into());
 
         let remainder = chunkid >> (self.minishard_bits + self.shard_bits);
 
@@ -1084,7 +1076,6 @@ pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> 
     }
 
     let mut code: Vec<u64> = vec![0; gridpt.len()];
-    console::log_1(&format!("compressed_morton_code: code [{:?}], gridpt.len: {:?}", code.iter().format(", "), gridpt.len()).into());
     let num_bits: Vec<usize> = grid_size.iter().map(|&size| (size as f64).log(2.0).ceil() as usize).collect();
     let mut j: u64 = 0;
     let one: u64 = 1;
@@ -1300,14 +1291,9 @@ impl CacheService<'_> {
         let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
         .map(|(k,v)| (v.clone(),k.clone())).collect();
 
-        console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
-        console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
-        console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
-
         // Check for None-entries in alias_to_path?
 
         let locs = self.compute_data_locations(&aliases);
-        console::log_1(&format!("download_as: locs: {:?}", locs).into());
 
         let mut fragments: HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> = HashMap::new();
 
@@ -1326,19 +1312,10 @@ impl CacheService<'_> {
         }
 
         let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
-        console::log_1(&format!("download_as: remote_path_tuples: {:?}", remote_path_tuples).into());
-
-        /*
-        let request_tuples: HashMap<(String, u64, u64)> = remote_path_tuples.iter()
-        .map(|p| vec![("path", p[0]), ("start", p[1]), ("end", p[2])])
-        .collect();
-        */
-
         let n_remote_path_tuples = remote_path_tuples.len();
 
         // Get a Future that retrieves the data
         let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
-        console::log_1(&format!("download_as: load fragments: {:?}", load_fragments).into());
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
@@ -1365,22 +1342,9 @@ impl CacheService<'_> {
             fragments.insert(key.clone(), content.clone());
         }
 
-        console::log_1(&format!("download_as: fragments: {:?}", fragments).into());
-
         fragments
     }
 
-    /*
-    def get(self, cloudpaths, progress=None):
-        progress = self.config.progress if progress is None else progress
-
-        cf = CloudFiles(
-        'file://' + self.path,
-        progress=progress,
-        locking=self.config.cache_locking,
-        )
-        return cf.get(cloudpaths, return_dict=True)
-    */
     /// Get data from cache
     pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, (Vec<u8>, Option<String>)> {
         // FIXME
@@ -1502,7 +1466,6 @@ impl<'a> CloudFiles<'a> {
     pub async fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
         let n_requet_bundles = request_bundles.len();
-        console::log_1(&format!("CloudFiles.get (num bundles: {:?})", n_requet_bundles).into());
         let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles).await;
 
         load_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
@@ -1686,7 +1649,6 @@ impl<'a> ShardReader<'a> {
     pub async fn get_data(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
         parallel:Option<u32>, raw:Option<bool>) -> io::Result<HashMap<u64, Option<(Vec<u8>, Option<String>)>>>
     {
-        console::log_1(&format!("ShardReader: get_data for labels {}", labels.iter().format(", ")).into());
         let _path = path.unwrap_or("");
         let _parallel = parallel.unwrap_or(1);
         let is_raw = raw.unwrap_or(true);
@@ -1708,7 +1670,6 @@ impl<'a> ShardReader<'a> {
         // { label: [ filename, byte start, num_bytes ] }
         let mut exists = self.exists(labels, Some(_path), Some(true), progress).await;
 
-        console::log_1(&format!("ShardReader: exists for labels {}", labels.iter().format(", ")).into());
         let mut non_existing: Vec<u64> = Vec::new();
         for (k, v) in exists.iter() {
             if v.is_none() {
@@ -1719,7 +1680,6 @@ impl<'a> ShardReader<'a> {
             results.insert(*k, None);
             exists.remove(k);
         }
-        console::log_1(&format!("ShardReader: non_existing {}", non_existing.iter().format(", ")).into());
 
         let mut files: Vec<ShardingFileRange> = Vec::new();
         for (k, v) in exists.iter() {
@@ -1734,8 +1694,6 @@ impl<'a> ShardReader<'a> {
                     end: _v.1.checked_add(_v.2).unwrap(),
                 });
         }
-        console::log_1(&format!("ShardReader: key_label {:?}", key_label.iter().format(", ")).into());
-        console::log_1(&format!("ShardReader: files {:?}", files.iter().format(", ")).into());
 
         // Requesting many individual shard chunks is slow, but due to z-ordering
         // we might be able to combine adjacent byte ranges. Especially helpful
@@ -1768,13 +1726,11 @@ impl<'a> ShardReader<'a> {
                     slice_end: (chunk.end - last_bundle_start) as usize,
                 })
         }
-        console::log_1(&format!("ShardReader: bundles {:?}", bundles.iter().format(", ")).into());
 
         // Responses are not guaranteed to be in order of requests
         let bundles_resp_list = CloudFiles::new(
             data_loader, full_path.to_string(), progress.unwrap_or(false), _parallel
         ).get(&bundles).await;
-        console::log_1(&format!("ShardReader: bundles_resp_list {:?}", bundles_resp_list.iter().format(", ")).into());
 
         let mut bundles_resp = HashMap::new();
         for r in bundles_resp_list.iter() {
@@ -1796,7 +1752,6 @@ impl<'a> ShardReader<'a> {
                 }
             }
         }
-        console::log_1(&format!("ShardReader: binaries {:?}", binaries.iter().format(", ")).into());
 
         // TODO: Optional decode
         if !is_raw {
@@ -1893,7 +1848,6 @@ impl<'a> ShardReader<'a> {
         let mut unique_labels: Vec<u64> = labels.to_owned();
         let mut unique_label_set = HashSet::new();
         unique_labels.retain(|e| unique_label_set.insert(*e));
-        console::log_1(&format!("exists: unique_label_set {}", unique_label_set.iter().format(", ")).into());
 
         for label in unique_labels.into_iter() {
             let (filename, minishard_number) = self.compute_shard_location(label);
@@ -1906,21 +1860,15 @@ impl<'a> ShardReader<'a> {
             let filename_list = filename_to_minishard_num.entry(filename.clone()).or_default();
             filename_list.push(minishard_number);
         }
-        console::log_1(&format!("exists: to_labels {:?}", to_labels.iter().format(", ")).into());
-        console::log_1(&format!("exists: to_all_labels {:?}", to_all_labels.iter().format(", ")).into());
-        console::log_1(&format!("exists: filename_to_minishard_num {:?}", filename_to_minishard_num.iter().format(", ")).into());
 
         let label_filenames = to_all_labels.keys().cloned().collect();
         let indices = self.get_indices(&label_filenames, Some(path), progress).await;
-
-        console::log_1(&format!("exists: indices {:?}", indices.iter().format(", ")).into());
 
         let requests = indices.iter()
             .map(|(filepath, idx)| (
                 basename(filepath), idx, filename_to_minishard_num[&basename(filepath)].clone()))
             .collect();
         let all_minishards = self.get_minishard_indices_for_files(&requests, Some(path), progress).await;
-        console::log_1(&format!("exists: all_minishards {:?}", all_minishards.iter().format(", ")).into());
 
         let mut results: HashMap<u64, Option<(String, u64, u64)>> = HashMap::new();
         for (filename, file_minishards) in all_minishards.into_iter() {
@@ -1954,7 +1902,6 @@ impl<'a> ShardReader<'a> {
             }
         }
 
-        console::log_1(&format!("exists: results {:?}", results.iter().format(", ")).into());
         results
     }
 
@@ -2043,16 +1990,11 @@ impl<'a> ShardReader<'a> {
                 end: self.spec.index_length(),
             });
         }
-        console::log_1(&format!("get_indices: full_paths [{:?}]", full_paths.iter().format(", ")).into());
-        console::log_1(&format!("get_indices: fulfilled [{:?}]", fulfilled.iter().format(", ")).into());
-        console::log_1(&format!("get_indices: requests [{:?}]", requests.iter().format(", ")).into());
 
         let load_binaries = self.cache.download_as(requests, Some(_progress));
         let binaries = load_binaries.await;
-        console::log_1(&format!("get_indices: binaries [{:?}]", binaries.iter().format(", ")).into());
         for ((fname, b, c), (content, etag)) in binaries.iter() {
             let index = self.decode_index(content, Some(fname.clone()));
-            console::log_1(&format!("get_indices: decoded index {:?}", index).into());
             if index.is_ok() {
                 let unwrapped_index = index.unwrap();
                 self.shard_index_cache.put(fname.clone(), Some(unwrapped_index.clone()));
@@ -2186,18 +2128,13 @@ impl<'a> ShardReader<'a> {
             }
         }
 
-        console::log_1(&format!("get_minishard_indices_for_files: download_requests {:?}", download_requests.iter().format(", ")).into());
         let load_results = self.cache.download_as(download_requests, progress).await;
-        console::log_1(&format!("get_minishard_indices_for_files: load_results {:?}", load_results).into());
-        console::log_1(&format!("get_minishard_indices_for_files: msn_map {:?}", msn_map).into());
 
         for ((full_filename, start, end), (content, etag)) in load_results.into_iter() {
             let filename = basename(&full_filename);
             let cache_key = (filename.clone(), start, end);
             let msn = msn_map.get(&cache_key).unwrap();
-            console::log_1(&format!("get_minishard_indices_for_files: msn {:?}", msn).into());
             let minishard_index = self.decode_minishard_index(&content, &Some(filename.clone()));
-            console::log_1(&format!("get_minishard_indices_for_files: minishard index {:?}", minishard_index).into());
             self.minishard_index_cache.put(cache_key, Some(minishard_index.clone()));
 
             fulfilled_by_filename.get_mut(&filename).unwrap()
@@ -2308,8 +2245,6 @@ impl<'a> ShardReader<'a> {
     /// Returns [[label, offset, size], ... ] where offset and size are in bytes.
     pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, filename: &Option<String>)
             -> Vec<(u64, u64, u64)> {
-        console::log_1(&format!("decode_minishard_index: bytes: {:?}, filename: {:?} encoding: {:?}", minishard_index_bytes, filename, self.spec.minishard_index_encoding).into());
-
         let mut decompressed: Vec<u8> = Vec::new();
         let minishard_index = if self.spec.minishard_index_encoding == MinishardIndexEncoding::Raw {
                 minishard_index_bytes
@@ -2323,13 +2258,10 @@ impl<'a> ShardReader<'a> {
                 &decompressed
             };
 
-        console::log_1(&format!("decode_minishard_index: minishard index: {:?}", minishard_index).into());
         let mut index: Vec<u64> = vec![0; minishard_index.len().div_floor(8)]; // buffer length / 8 = 8
         u8_to_u64_array(minishard_index, &mut index);
-        console::log_1(&format!("decode_minishard_index: u64 version: {:?}", index).into());
 
         let mut decoded_minishard_index: Vec<(u64, u64, u64)> = Vec::new();
-        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: len: {:?}, floor: {:?}, index len: {:?}", minishard_index.len(), minishard_index.len().div_floor(3), index.len()).into());
         let dim_len = index.len().div_floor(3);
         for i in 0..(dim_len) {
             decoded_minishard_index.push((
@@ -2337,8 +2269,6 @@ impl<'a> ShardReader<'a> {
                     index[dim_len + i],
                     index[2 * dim_len + i]))
         }
-
-        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
 
         let mut label_cumsum = 0;
         let mut offset_cumsum = 0;
@@ -2348,8 +2278,6 @@ impl<'a> ShardReader<'a> {
             val.0 = label_cumsum;
             val.1 = offset_cumsum;
         }
-
-        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
 
         let mut size_cumsum = 0;
         for i in 1..decoded_minishard_index.len() {
@@ -2361,8 +2289,6 @@ impl<'a> ShardReader<'a> {
         for i in 0..decoded_minishard_index.len() {
             decoded_minishard_index[i].1 += spec_len;
         }
-
-        console::log_1(&format!("decode_minishard_index: decoded_minishard_index: {:?}", decoded_minishard_index).into());
 
         decoded_minishard_index
     }
@@ -2378,9 +2304,6 @@ pub fn decode(data: &Vec<u8>) -> Vec<u8> {
     // FIXME: For now assume JPEG encoding
     let mut decoder = JpegDecoder::new(data);
     let decoded_data = decoder.decode().expect("JPEG decoding failed");
-
-    console::log_1(&format!("decoded data: {:?}", decoded_data).into());
-    console::log_1(&format!("decoded data len: {:?}", decoded_data.len()).into());
 
     // shape = list(bbox.size3()) + [ meta.num_channels ]
     // data.reshape(shape, order='F')
