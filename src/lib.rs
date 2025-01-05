@@ -402,8 +402,8 @@ pub struct DataBlockMetadata {
 }
 
 pub fn u8_to_u64_array(
-	array: &[u8],
-	result: &mut [u64],
+    array: &[u8],
+    result: &mut [u64],
 ) {
     let n = result.len();
     let (result, array) = (&mut result[..n], &array.as_chunks().0[..n]);
@@ -414,8 +414,8 @@ pub fn u8_to_u64_array(
 }
 
 pub fn u64_to_u8_array(
-	array: &[u64],
-	result: &mut [u8],
+    array: &[u64],
+    result: &mut [u8],
 ) {
     let n = array.len();
     for i in 0..n {
@@ -743,8 +743,6 @@ pub trait ReadableDataBlock {
     /// Read the stream directly into the block data instead of creating a copied
     /// byte buffer.
     fn read_data<R: io::Read>(&mut self, source: R) -> io::Result<()>;
-
-    //fn read_data_sharded<R: std::io::Read>(&mut self, source: R) -> std::io::Result<()>;
 }
 
 /// Traits for data blocks that can write out data.
@@ -1137,8 +1135,8 @@ pub fn basename(path: &String) -> String {
 
 #[derive(Clone, Debug)]
 pub struct DataLocationDetails {
-	local: Vec<String>,
-	remote: Vec<String>,
+    local: Vec<String>,
+    remote: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -1199,8 +1197,8 @@ impl<'a> Debug for (dyn DataLoader + 'a) {
 }
 
 pub struct CacheService<'a> {
-	pub enabled: bool,
-	pub data_loader: &'a dyn DataLoader,
+    pub enabled: bool,
+    pub data_loader: &'a dyn DataLoader,
     pub meta: &'a PrecomputedMetadata,
 }
 
@@ -1242,14 +1240,14 @@ impl CacheService<'_> {
 
         fragments = {}
         if self.enabled:
-			fragments = self.get(locs['local'], progress=progress)
-			keys = list(fragments.keys())
-			for key in keys:
-				return_key = (alias_to_path[key], alias_tuples[key][1], alias_tuples[key][2])
-				fragments[return_key] = fragments[key]
-				del fragments[key]
-			for alias in locs['local']:
-				del alias_tuples[alias]
+            fragments = self.get(locs['local'], progress=progress)
+            keys = list(fragments.keys())
+            for key in keys:
+                return_key = (alias_to_path[key], alias_tuples[key][1], alias_tuples[key][2])
+                fragments[return_key] = fragments[key]
+                del fragments[key]
+            for alias in locs['local']:
+                del alias_tuples[alias]
 
         remote_path_tuples = list(alias_tuples.values())
 
@@ -1291,7 +1289,7 @@ impl CacheService<'_> {
     pub async fn download_as(&self, requests: Vec<IndexFileDetails>, progress: Option<bool>) -> HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> {
 
         if requests.is_empty() {
-        return HashMap::new();
+            return HashMap::new();
         }
 
         let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
@@ -1302,22 +1300,24 @@ impl CacheService<'_> {
         let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
         .map(|(k,v)| (v.clone(),k.clone())).collect();
 
-            console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
-            console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
-            console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
+        console::log_1(&format!("download_as: alias_tuples [{:?}]", alias_tuples.iter().format(", ")).into());
+        console::log_1(&format!("download_as: alias_to_path [{:?}]", alias_to_path.iter().format(", ")).into());
+        console::log_1(&format!("download_as: path_to_alias [{:?}]", path_to_alias.iter().format(", ")).into());
 
         // Check for None-entries in alias_to_path?
 
         let locs = self.compute_data_locations(&aliases);
-            console::log_1(&format!("download_as: locs: {:?}", locs).into());
+        console::log_1(&format!("download_as: locs: {:?}", locs).into());
 
         let mut fragments: HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> = HashMap::new();
 
         if self.enabled {
         let fragment_keys = self.get(&locs.local, progress);
         for (key, result) in fragment_keys.into_iter() {
-            let return_key = (alias_to_path.get(&key).unwrap().clone(), alias_tuples.get(&key).unwrap().1,
-                        alias_tuples.get(&key).unwrap().2);
+            let return_key = (
+                alias_to_path.get(&key).unwrap().clone(),
+                alias_tuples.get(&key).unwrap().1,
+                alias_tuples.get(&key).unwrap().2);
             fragments.insert(return_key, result);
         }
         for alias in locs.local.iter() {
@@ -1326,7 +1326,7 @@ impl CacheService<'_> {
         }
 
         let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
-            console::log_1(&format!("download_as: remote_path_tuples: {:?}", remote_path_tuples).into());
+        console::log_1(&format!("download_as: remote_path_tuples: {:?}", remote_path_tuples).into());
 
         /*
         let request_tuples: HashMap<(String, u64, u64)> = remote_path_tuples.iter()
@@ -1337,7 +1337,7 @@ impl CacheService<'_> {
         let n_remote_path_tuples = remote_path_tuples.len();
 
         // Get a Future that retrieves the data
-		    let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
+        let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
         console::log_1(&format!("download_as: load fragments: {:?}", load_fragments).into());
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
@@ -1384,56 +1384,57 @@ impl CacheService<'_> {
     /// Get data from cache
     pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, (Vec<u8>, Option<String>)> {
         // FIXME
+        console::log_1(&format!("cache service: get() - not implemented").into());
         HashMap::new()
     }
 
     /*
-	def compute_data_locations(self, cloudpaths):
-		if not self.enabled:
-			return { 'local': [], 'remote': cloudpaths }
+    def compute_data_locations(self, cloudpaths):
+        if not self.enabled:
+            return { 'local': [], 'remote': cloudpaths }
 
-		pathmodule = posixpath if self.meta.path.protocol != 'file' else os.path
+        pathmodule = posixpath if self.meta.path.protocol != 'file' else os.path
 
-		def no_compression_ext(fnames):
-		results = []
-		for fname in fnames:
-			(name, ext) = pathmodule.splitext(fname)
-			if ext in COMPRESSION_EXTENSIONS:
-			results.append(name)
-			else:
-			results.append(fname)
-		return results
+        def no_compression_ext(fnames):
+        results = []
+        for fname in fnames:
+            (name, ext) = pathmodule.splitext(fname)
+            if ext in COMPRESSION_EXTENSIONS:
+            results.append(name)
+            else:
+            results.append(fname)
+        return results
 
-		list_dirs = set([ pathmodule.dirname(pth) for pth in cloudpaths ])
-		filenames = []
+        list_dirs = set([ pathmodule.dirname(pth) for pth in cloudpaths ])
+        filenames = []
 
-		for list_dir in list_dirs:
-		list_dir = os.path.join(self.path, list_dir)
-		filenames += no_compression_ext(os.listdir(mkdir(list_dir)))
+        for list_dir in list_dirs:
+        list_dir = os.path.join(self.path, list_dir)
+        filenames += no_compression_ext(os.listdir(mkdir(list_dir)))
 
-		basepathmap = { pathmodule.basename(path): pathmodule.dirname(path) for path in cloudpaths }
+        basepathmap = { pathmodule.basename(path): pathmodule.dirname(path) for path in cloudpaths }
 
-		# check which files are already cached, we only want to download ones not in cache
-		requested = set([ pathmodule.basename(path) for path in cloudpaths ])
-		already_have = requested.intersection(set(filenames))
-		to_download = requested.difference(already_have)
+        # check which files are already cached, we only want to download ones not in cache
+        requested = set([ pathmodule.basename(path) for path in cloudpaths ])
+        already_have = requested.intersection(set(filenames))
+        to_download = requested.difference(already_have)
 
-		download_paths = [ pathmodule.join(basepathmap[fname], fname) for fname in to_download ]
-		already_have = [ os.path.join(basepathmap[fname], fname) for fname in already_have ]
+        download_paths = [ pathmodule.join(basepathmap[fname], fname) for fname in to_download ]
+        already_have = [ os.path.join(basepathmap[fname], fname) for fname in already_have ]
 
-		return { 'local': already_have, 'remote': download_paths }
-	*/
+        return { 'local': already_have, 'remote': download_paths }
+    */
     pub fn compute_data_locations(&self, cloudpaths: &Vec<String>) -> DataLocationDetails {
 
-		if !self.enabled {
-			return DataLocationDetails {
-				local: Vec::new(),
-				remote: cloudpaths.to_vec()
-			};
-		}
+        if !self.enabled {
+            return DataLocationDetails {
+                local: Vec::new(),
+                remote: cloudpaths.to_vec()
+            };
+        }
 
-		// FIXME
-		unimplemented!();
+        // FIXME
+        unimplemented!();
     }
 }
 
@@ -1485,7 +1486,7 @@ pub struct CloudFiles<'a> {
     path: String,
     progress: bool,
     parallel: u32,
-	data_loader: &'a (dyn DataLoader),
+    data_loader: &'a (dyn DataLoader),
 }
 
 impl<'a> CloudFiles<'a> {
@@ -1502,7 +1503,7 @@ impl<'a> CloudFiles<'a> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
         let n_requet_bundles = request_bundles.len();
         console::log_1(&format!("CloudFiles.get (num bundles: {:?})", n_requet_bundles).into());
-		let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles).await;
+        let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles).await;
 
         load_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
             path: x.path,
@@ -1525,7 +1526,7 @@ impl fmt::Display for CloudFiles<'_> {
 pub struct ShardReader<'a> {
     meta: &'a PrecomputedMetadata,
     cache: &'a CacheService<'a>,
-	data_loader: &'a (dyn DataLoader),
+    data_loader: &'a (dyn DataLoader),
     spec: &'a ShardingSpecification,
     shard_index_cache: LruCache<String, Option<Vec<(u64, u64)>>>,
     minishard_index_cache: LruCache<(String, u64, u64), Option<Vec<(u64, u64, u64)>>>,
@@ -1536,7 +1537,7 @@ impl<'a> ShardReader<'a> {
         meta: &'a PrecomputedMetadata,
         cache: &'a CacheService,
         spec: &'a ShardingSpecification,
-	    data_loader: &'a (dyn DataLoader),
+        data_loader: &'a (dyn DataLoader),
         shard_index_cache_size:Option<NonZeroUsize>,
         minishard_index_cache_size:Option<NonZeroUsize>,
     ) -> Self {
