@@ -897,7 +897,6 @@ pub trait DefaultBlockHeaderReader<R: io::Read> {
 
         let bs = if limit_to_data_bounds {
             let bs = data_attrs.get_block_size(zoom_level);
-            let mut new_bs = bs.clone();
             let bounds = data_attrs.bounds(zoom_level);
             let new_bs = bs.iter().zip(bounds[1].clone()).map(|(a, b)| {
                 if i64::from(*a) > b {
