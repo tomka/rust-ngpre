@@ -2,10 +2,6 @@
 
 A (mostly pure) rust implementation of the [Neuroglancer Precomputed n-dimensional tensor file system storage format](https://github.com/google/neuroglancer/tree/master/src/neuroglancer/datasource/precomputed) created by the Jeremy Maitin-Shepard at Google. This library is based on the [rust-n5](https://github.com/aschampion/rust-n5) library and reused a lot of its infrastructure.
 
-## Differences from Java NgPre
-- Dataset paths may be relative. The root path in a dataset is addressable both by `"/"` and `""`.
-- Dataset paths are more strict. Calling methods with paths outside the dataset, e.g., `".."`, will return a `Result::Err`.
-
 ## Minimum supported Rust version (MSRV)
 
 Stable 1.39
@@ -67,6 +63,10 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
+
+## References
+
+The library's sharding implementation is inspired by cloud-volume's sharding code (Python).
 
 ### Contribution
 
