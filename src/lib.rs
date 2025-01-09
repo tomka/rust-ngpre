@@ -1176,8 +1176,8 @@ pub struct DataLoaderResult {
 
 #[async_trait(?Send)]
 pub trait DataLoader {
-    async fn get(&self, path: String, progress: Option<bool>, tuples: Vec<(String, u64, u64)>, num: usize)
-        -> HashMap<String, io::Result<DataLoaderResult>>;
+    async fn get(&self, path: String, progress: Option<bool>, tuples: &Vec<(String, u64, u64)>, num: usize)
+        -> HashMap<(String, u64, u64), io::Result<DataLoaderResult>>;
 }
 
 impl<'a> Debug for (dyn DataLoader + 'a) {
@@ -1297,27 +1297,30 @@ impl CacheService<'_> {
         let mut fragments: HashMap<(String, u64, u64), (Vec<u8>, Option<String>)> = HashMap::new();
 
         if self.enabled {
-        let fragment_keys = self.get(&locs.local, progress);
-        for (key, result) in fragment_keys.into_iter() {
-            let return_key = (
-                alias_to_path.get(&key).unwrap().clone(),
-                alias_tuples.get(&key).unwrap().1,
-                alias_tuples.get(&key).unwrap().2);
-            fragments.insert(return_key, result);
-        }
-        for alias in locs.local.iter() {
-            alias_tuples.remove(alias);
-        }
+            let fragment_keys = self.get(&locs.local, progress);
+            for (key, result) in fragment_keys.into_iter() {
+                let return_key = (
+                    alias_to_path.get(&key).unwrap().clone(),
+                    alias_tuples.get(&key).unwrap().1,
+                    alias_tuples.get(&key).unwrap().2);
+                fragments.insert(return_key, result);
+            }
+            for alias in locs.local.iter() {
+                alias_tuples.remove(alias);
+            }
         }
 
         let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
         let n_remote_path_tuples = remote_path_tuples.len();
 
+        //console::log_1(&format!("tuples: {:?}", &remote_path_tuples).into());
         // Get a Future that retrieves the data
-        let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, remote_path_tuples, n_remote_path_tuples).await;
+        let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, &remote_path_tuples, n_remote_path_tuples).await;
+        //console::log_1(&format!("load_fragments: {:?}", &load_fragments).into());
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
+        // FIXME: Be more graceful about missing downloads
         for (_path, frag) in load_fragments.iter() {
             if let Err(why) = frag {
                 panic!("{:?}", why)
@@ -1465,7 +1468,7 @@ impl<'a> CloudFiles<'a> {
     pub async fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
         let n_requet_bundles = request_bundles.len();
-        let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), request_bundles, n_requet_bundles).await;
+        let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), &request_bundles, n_requet_bundles).await;
 
         load_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
             path: x.path,
