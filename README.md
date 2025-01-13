@@ -1,6 +1,6 @@
 # NgPre [![Build Status](https://travis-ci.org/tomka/rust-ngpre.svg?branch=master)](https://travis-ci.org/tomka/rust-ngpre) [![Coverage](https://codecov.io/gh/tomka/rust-ngpre/branch/master/graph/badge.svg)](https://codecov.io/gh/tomka/rust-ngpre)
 
-A (mostly pure) rust implementation of the [Neuroglancer Precomputed n-dimensional tensor file system storage format](https://github.com/google/neuroglancer/tree/master/src/neuroglancer/datasource/precomputed) created by the Jeremy Maitin-Shepard at Google. This library is based on the [rust-n5](https://github.com/aschampion/rust-n5) library and reused a lot of its infrastructure.
+A (mostly pure) rust implementation of the [Neuroglancer Precomputed n-dimensional tensor file system storage format](https://github.com/google/neuroglancer/tree/master/src/neuroglancer/datasource/precomputed) created by the Jeremy Maitin-Shepard at Google. This library is based on the [rust-n5](https://github.com/aschampion/rust-n5) library and reused a lot of its infrastructure. Sharded datasets are supported.
 
 ## Minimum supported Rust version (MSRV)
 
