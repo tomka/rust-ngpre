@@ -1052,8 +1052,6 @@ pub fn gridpoints(bbox: &BBox<GridCoord>, volume_bbox: &BBox<GridCoord>, chunk_s
         }
     }
 
-    console::log_1(&format!("grid bbox: {:?}, grid points: {:?}", grid_cutout.iter().format(", "), grid_points.iter().format(", ")).into());
-
     grid_points
 }
 
@@ -1313,10 +1311,8 @@ impl CacheService<'_> {
         let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
         let n_remote_path_tuples = remote_path_tuples.len();
 
-        //console::log_1(&format!("tuples: {:?}", &remote_path_tuples).into());
         // Get a Future that retrieves the data
         let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, &remote_path_tuples, n_remote_path_tuples).await;
-        //console::log_1(&format!("load_fragments: {:?}", &load_fragments).into());
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
@@ -1770,6 +1766,92 @@ impl<'a> ShardReader<'a> {
         results.extend(binaries);
 
         Ok(results)
+    }
+
+    pub async fn get_bundled_grid_coords(&mut self, labels: &'a Vec<u64>, path:Option<&'a str>, progress:Option<bool>,
+        parallel:Option<u32>, raw:Option<bool>) -> io::Result<Vec<Vec<u64>>>
+    {
+        let _path = path.unwrap_or("");
+        let _parallel = parallel.unwrap_or(1);
+        let is_raw = raw.unwrap_or(true);
+
+        let mut results: HashMap<u64, Option<(Vec<u8>, Option<String>)>> = HashMap::new();
+
+        if labels.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Is accessed by both closures below
+        let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
+        let mut bundles: Vec<ShardingBundle> = Vec::new();
+        let full_path = path_join(vec![&self.meta.cloudpath, _path]).unwrap();
+        let data_loader = self.data_loader;
+
+        // { label: [ filename, byte start, num_bytes ] }
+        let mut exists = self.exists(labels, Some(_path), Some(true), progress).await;
+
+        let mut non_existing: Vec<u64> = Vec::new();
+        for (k, v) in exists.iter() {
+            if v.is_none() {
+                non_existing.push(*k);
+            }
+        }
+        for k in non_existing.iter() {
+            results.insert(*k, None);
+            exists.remove(k);
+        }
+
+        let mut files: Vec<(ShardingFileRange, u64)> = Vec::new();
+        for (k, v) in exists.iter() {
+            let _v = v.as_ref().unwrap();
+            let upath = Path::new(&_v.0).file_name().unwrap().to_str().unwrap();
+            key_label.insert(
+                (upath.to_string(), _v.1, _v.2),
+                *k);
+            files.push((ShardingFileRange {
+                    path: upath.to_string(),
+                    start: _v.1,
+                    end: _v.1.checked_add(_v.2).unwrap(),
+                }, *k));
+        }
+
+        // Requesting many individual shard chunks is slow, but due to z-ordering
+        // we might be able to combine adjacent byte ranges. Especially helpful
+        // when downloading entire shards!
+        // TODO: implement sorting of files into bundles
+        let mut sorted_files = files.to_vec();
+        sorted_files.sort_unstable_by_key(|(item, _label)| (item.path.clone(), item.start));
+        let mut label_bundles: Vec<Vec<u64>> = Vec::new();
+        for (chunk, label) in sorted_files.iter_mut() {
+            if bundles.is_empty() || (chunk.path != bundles.last().unwrap().path)
+                    || (chunk.start != bundles.last().unwrap().end)
+            {
+                let bundle = ShardingBundle {
+                    content: None,
+                    subranges: vec![],
+                    path: chunk.path.clone(),
+                    start: chunk.start,
+                    end: chunk.end,
+                };
+                bundles.push(bundle);
+                label_bundles.push(vec![*label]);
+            } else {
+                bundles.last_mut().unwrap().end = chunk.end;
+                label_bundles.last_mut().unwrap().push(*label);
+            }
+
+            let last_bundle_start = bundles.last_mut().unwrap().start;
+
+            bundles.last_mut().unwrap().subranges.push(
+                BundleSubrange {
+                    start: chunk.start,
+                    length: chunk.end - chunk.start,
+                    slice_start: (chunk.start - last_bundle_start) as usize,
+                    slice_end: (chunk.end - last_bundle_start) as usize,
+                })
+        }
+
+        Ok(label_bundles)
     }
 
     /*
