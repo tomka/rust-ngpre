@@ -1174,7 +1174,10 @@ pub struct DataLoaderResult {
 
 #[async_trait(?Send)]
 pub trait DataLoader {
-    async fn get(&self, path: String, progress: Option<bool>, tuples: &Vec<(String, u64, u64)>, num: usize)
+    async fn get(&self, path: String, progress: Option<bool>, tuples: &Vec<(String, UnboundedGridCoord)>)
+        -> HashMap<(String, UnboundedGridCoord), io::Result<DataLoaderResult>>;
+
+    async fn get_sharded(&self, path: String, progress: Option<bool>, tuples: &Vec<(String, u64, u64)>)
         -> HashMap<(String, u64, u64), io::Result<DataLoaderResult>>;
 }
 
@@ -1309,10 +1312,9 @@ impl CacheService<'_> {
         }
 
         let remote_path_tuples: Vec<(String, u64, u64)> = alias_tuples.values().cloned().collect();
-        let n_remote_path_tuples = remote_path_tuples.len();
 
         // Get a Future that retrieves the data
-        let load_fragments = self.data_loader.get(self.meta.cloudpath.clone(), progress, &remote_path_tuples, n_remote_path_tuples).await;
+        let load_fragments = self.data_loader.get_sharded(self.meta.cloudpath.clone(), progress, &remote_path_tuples).await;
         // Avoid requiring to move self into closure
         let is_enabled = self.enabled;
 
@@ -1463,8 +1465,7 @@ impl<'a> CloudFiles<'a> {
 
     pub async fn get(&self, target: &Vec<ShardingBundle>) -> Vec<BundleDetails> {
         let request_bundles: Vec<(String, u64, u64)> = target.iter().map(|x| (x.path.clone(), x.start, x.end)).collect();
-        let n_requet_bundles = request_bundles.len();
-        let load_fragments = self.data_loader.get(self.path.clone(), Some(self.progress), &request_bundles, n_requet_bundles).await;
+        let load_fragments = self.data_loader.get_sharded(self.path.clone(), Some(self.progress), &request_bundles ).await;
 
         load_fragments.into_values().map(|x| x.unwrap()).map(|x| BundleDetails {
             path: x.path,
