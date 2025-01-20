@@ -30,6 +30,7 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use itertools::izip;
 
 use crate::compression::Compression;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -898,11 +899,10 @@ pub trait DefaultBlockHeaderReader<R: io::Read> {
         let bs = if limit_to_data_bounds {
             let bs = data_attrs.get_block_size(zoom_level);
             let bounds = data_attrs.bounds(zoom_level);
-            let new_bs = bs.iter().zip(bounds[1].clone()).map(|(a, b)| {
-                if i64::from(*a) > b {
-                    return b as u32;
-                }
-                return *a;
+            let new_bs = izip!(bs.iter(), &bounds[1], &grid_position).map(|(&a, &b, &c)| {
+                let block_start = u64::from(a) * c;
+                let block_end = cmp::min(block_start + u64::from(a), b as u64);
+                return (block_end - block_start) as u32;
             }).collect();
             new_bs
         } else {
@@ -941,15 +941,13 @@ pub trait DefaultBlockReader<T: ReflectedType, R: io::Read>: DefaultBlockHeaderR
         let header = Self::read_block_header(grid_position, data_attrs, zoom_level, true);
 
         let mut block = T::create_data_block(header);
-        // Sharded data comes in de as i64compressed already
+        // Sharded data comes decompressed already
         let mut decompressed = if data_attrs.is_sharded(zoom_level) {
                 compression::CompressionType::default().decoder(buffer)
             } else {
                 data_attrs.get_compression(zoom_level).decoder(buffer)
             };
 
-        // FIXME: We choose to ignore errors for now, because this is the easiest way of handling
-        // smaller blocks on the edges.
         let _ = block.read_data(&mut decompressed);
         Ok(block)
     }
