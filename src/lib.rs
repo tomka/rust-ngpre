@@ -35,11 +35,9 @@ use itertools::izip;
 use crate::compression::Compression;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use flate2::read::GzDecoder;
-use itertools::Itertools;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use web_sys::console;
 use zune_jpeg::JpegDecoder;
 
 pub mod compression;
@@ -146,7 +144,7 @@ pub struct ShardLocation {
     pub remainder: u64,
 }
 
-fn OffsetCoordDefault() -> OffsetCoord {
+fn offset_coord_default() -> OffsetCoord {
     OffsetCoord::from_vec(vec![0, 0, 0])
 }
 
@@ -352,7 +350,7 @@ pub struct ScaleEntry {
     // Optional. If specified, must be a 3-element array [x, y, z] of integer values specifying a
     // translation in voxels of the origin of the data relative to the global coordinate frame. If
     // not specified, defaults to [0, 0, 0].
-    #[serde(default = "OffsetCoordDefault")]
+    #[serde(default = "offset_coord_default")]
     pub voxel_offset: OffsetCoord,
 
     // If specified, indicates that volumetric chunk data is stored using the sharded format. Must
@@ -1283,11 +1281,11 @@ impl CacheService<'_> {
 
         let aliases: Vec<String> = requests.iter().map(|x| x.local_alias.clone()).collect();
         let mut alias_tuples: HashMap<String, (String, u64, u64)> = requests.iter()
-        .map(|req| (req.local_alias.clone(), (req.path.clone(), req.start, req.end))).collect();
+            .map(|req| (req.local_alias.clone(), (req.path.clone(), req.start, req.end))).collect();
         let alias_to_path: HashMap<String, String> = requests.iter()
-        .map(|req| (req.local_alias.clone(), req.path.clone())).collect();
-        let path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
-        .map(|(k,v)| (v.clone(),k.clone())).collect();
+            .map(|req| (req.local_alias.clone(), req.path.clone())).collect();
+        let _path_to_alias: HashMap<(String, u64, u64), String> = alias_tuples.iter()
+            .map(|(k,v)| (v.clone(),k.clone())).collect();
 
         // Check for None-entries in alias_to_path?
 
@@ -1344,10 +1342,9 @@ impl CacheService<'_> {
     }
 
     /// Get data from cache
-    pub fn get(&self, cloudpaths: &Vec<String>, progress: Option<bool>) -> HashMap<String, (Vec<u8>, Option<String>)> {
-        // FIXME
-        console::log_1(&format!("cache service: get() - not implemented").into());
-        HashMap::new()
+    pub fn get(&self, _cloudpaths: &Vec<String>, _progress: Option<bool>) -> HashMap<String, (Vec<u8>, Option<String>)> {
+        // FIXME: Implement optional caching
+        unimplemented!();
     }
 
     /*
@@ -1772,7 +1769,7 @@ impl<'a> ShardReader<'a> {
     {
         let _path = path.unwrap_or("");
         let _parallel = parallel.unwrap_or(1);
-        let is_raw = raw.unwrap_or(true);
+        let _is_raw = raw.unwrap_or(true);
 
         let mut results: HashMap<u64, Option<(Vec<u8>, Option<String>)>> = HashMap::new();
 
@@ -1783,8 +1780,6 @@ impl<'a> ShardReader<'a> {
         // Is accessed by both closures below
         let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
         let mut bundles: Vec<ShardingBundle> = Vec::new();
-        let full_path = path_join(vec![&self.meta.cloudpath, _path]).unwrap();
-        let data_loader = self.data_loader;
 
         // { label: [ filename, byte start, num_bytes ] }
         let mut exists = self.exists(labels, Some(_path), Some(true), progress).await;
@@ -2076,7 +2071,7 @@ impl<'a> ShardReader<'a> {
 
         let load_binaries = self.cache.download_as(requests, Some(_progress));
         let binaries = load_binaries.await;
-        for ((fname, b, c), (content, etag)) in binaries.iter() {
+        for ((fname, _b, _c), (content, _etag)) in binaries.iter() {
             let index = self.decode_index(content, Some(fname.clone()));
             if index.is_ok() {
                 let unwrapped_index = index.unwrap();
@@ -2213,7 +2208,7 @@ impl<'a> ShardReader<'a> {
 
         let load_results = self.cache.download_as(download_requests, progress).await;
 
-        for ((full_filename, start, end), (content, etag)) in load_results.into_iter() {
+        for ((full_filename, start, end), (content, _etag)) in load_results.into_iter() {
             let filename = basename(&full_filename);
             let cache_key = (filename.clone(), start, end);
             let msn = msn_map.get(&cache_key).unwrap();
@@ -2293,7 +2288,7 @@ impl<'a> ShardReader<'a> {
             byte_ranges.insert(msn, (bytes_start_int, bytes_end_int));
         }
 
-        let full_path = self.meta.join(vec![&self.meta.cloudpath, path.unwrap_or("")]);
+        let _full_path = self.meta.join(vec![&self.meta.cloudpath, path.unwrap_or("")]);
 
         let mut pending_requests: Vec<(u64, u64, u64)> = Vec::new();
         for (msn, (bytes_start, bytes_end)) in byte_ranges.into_iter() {
@@ -2326,7 +2321,7 @@ impl<'a> ShardReader<'a> {
         return minishard_index
     */
     /// Returns [[label, offset, size], ... ] where offset and size are in bytes.
-    pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, filename: &Option<String>)
+    pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, _filename: &Option<String>)
             -> Vec<(u64, u64, u64)> {
         let mut decompressed: Vec<u8> = Vec::new();
         let minishard_index = if self.spec.minishard_index_encoding == MinishardIndexEncoding::Raw {
@@ -2337,7 +2332,8 @@ impl<'a> ShardReader<'a> {
                 }
 
                 let mut gz = GzDecoder::new(&minishard_index_bytes[..]);
-                let result = gz.read_to_end(&mut decompressed);
+                // FIXME: Don't ignore errors
+                let _ = gz.read_to_end(&mut decompressed);
                 &decompressed
             };
 
