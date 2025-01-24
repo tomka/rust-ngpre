@@ -241,19 +241,6 @@ impl ShardingSpecification {
         //self.validate()
     }
 
-    /*
-    def compute_minishard_mask(self, val):
-        if val < 0:
-            raise ValueError(str(val) + " must be greater or equal to than zero.")
-        elif val == 0:
-            return uint64(0)
-
-        minishard_mask = uint64(1)
-        for i in range(val - uint64(1)):
-            minishard_mask <<= uint64(1)
-            minishard_mask |= uint64(1)
-        return uint64(minishard_mask)
-    */
     pub fn compute_minishard_mask(&self, val: u64) -> u64 {
         // No need to check if val is less than zero because of type constraints
         if val == 0 {
@@ -268,14 +255,6 @@ impl ShardingSpecification {
         minishard_mask
     }
 
-     /*
-     def compute_shard_mask(self, shard_bits, minishard_bits):
-         ones64 = uint64(0xffffffffffffffff)
-         movement = uint64(minishard_bits + shard_bits)
-         shard_mask = ~((ones64 >> movement) << movement)
-         minishard_mask = self.compute_minishard_mask(minishard_bits)
-         return shard_mask & (~minishard_mask)j
-    */
     pub fn compute_shard_mask(&self, shard_bits: u64, minishard_bits: u64) -> u64 {
         let ones64 = 0xffffffffffffffff as u64;
         let movement = minishard_bits + shard_bits;
@@ -1103,13 +1082,7 @@ pub fn compressed_morton_code(gridpt: &Vec<GridCoord>, grid_size: &Vec<u64>) -> 
         }
     }
 
-    /*
-    // Return the result
-    if single_input {
-        return Ok(code[0]);
-    }
-    */
-    Ok(code) // Return the entire code vector if needed
+    Ok(code)
 }
 
 pub fn basename(path: &String) -> String {
@@ -1138,16 +1111,10 @@ impl PrecomputedMetadata {
     }
 
     fn join(&self, paths: Vec<&str>) -> Option<String> {
+        // FIXME: Check protocol of path (e.g. file://) and use appropriate delimiter
         let mut path = PathBuf::new();
         path.extend(paths);
         Some(path.to_str().unwrap().to_owned())
-        /*
-        def join(self, *paths):
-            if self.path.protocol == 'file':
-            return os.path.join(*paths)
-            else:
-            return posixpath.join(*paths)
-        */
     }
 
 }
@@ -1654,6 +1621,28 @@ impl<'a> ShardReader<'a> {
         }
 
         // TODO: Cache logic
+        /*
+        let cache: HashMap<u64, Option<(Vec<u8>, Option<String>)>> = HashMap::new();
+        if self.cache.enabled {
+            for lbl in labels.iter() {
+                cached = self.cache.get([
+                    self.meta.join(path, str(lbl)) for lbl in label
+                ], progress=progress)
+            }
+        }
+        */
+
+        /*
+        for (cloudpath, content) in cached.items() {
+            lbl = int(basename(cloudpath))
+            if content is not None:
+                label.remove(lbl)
+
+            results[lbl] = cached[cloudpath]
+        }
+
+        del cached
+        */
 
         // Is accessed by both closures below
         let mut key_label: HashMap<(String, u64, u64), u64> = HashMap::new();
@@ -1752,11 +1741,12 @@ impl<'a> ShardReader<'a> {
             unimplemented!();
         }
 
-        // TODO: Add data to cacheS, If enabled
-        // if self.cache.enabled:
+        // Add data to cache, if enabled
+        if self.cache.enabled {
         //     self.cache.put([
         //         (self.meta.join(path, str(filepath)), binary) for filepath, binary in binaries.items()
         //     ], progress=_progress)
+        }
 
         // Copy binary collection into result set
         results.extend(binaries);
@@ -1848,59 +1838,6 @@ impl<'a> ShardReader<'a> {
         Ok(label_bundles)
     }
 
-    /*
-    def exists(self, labels, path="", return_byte_range=False, progress=None):
-        """
-        """
-        return_one = False
-
-        try:
-            iter(labels)
-        except TypeError:
-            return_one = True
-
-        to_labels = defaultdict(list)
-        to_all_labels = defaultdict(list)
-        filename_to_minishard_num = defaultdict(list)
-
-        for label in set(toiter(labels)):
-            filename, minishard_number = self.compute_shard_location(label)
-            to_labels[(filename, minishard_number)].append(label)
-            to_all_labels[filename].append(label)
-            filename_to_minishard_num[filename].append(minishard_number)
-
-        indices = self.get_indices(to_all_labels.keys(), path, progress=progress)
-
-        all_minishards = self.get_minishard_indices_for_files([
-            (basename(filepath), index, filename_to_minishard_num[basename(filepath)]) \
-            for filepath, index in indices.items()
-            ], path, progress=progress)
-
-        results = {}
-        for filename, file_minishards in all_minishards.items():
-            filepath = self.meta.join(path, filename)
-            for mini_no, msi in file_minishards.items():
-                labels = to_labels[(filename, mini_no)]
-
-                for label in labels:
-                    if msi is None:
-                        results[label] = None
-                        continue
-
-                    idx = np.where(msi[:,0] == label)[0]
-                    if len(idx) == 0:
-                        results[label] = None
-                    else:
-                        if return_byte_range:
-                            _, offset, size = msi[idx,:][0]
-                            results[label] = [ filepath, int(offset), int(size) ]
-                        else:
-                            results[label] = filepath
-
-        if return_one:
-        return(list(results.values())[0])
-        return results
-    */
     /// Checks a shard's minishard index for whether a file exists.
     ///
     /// If return_byte_range = False:
@@ -1983,12 +1920,6 @@ impl<'a> ShardReader<'a> {
         results
     }
 
-    /*
-    def compute_shard_location(self, label):
-        shard_loc = self.spec.compute_shard_location(label)
-        filename = str(shard_loc.shard_number) + '.shard'
-        return (filename, shard_loc.minishard_number)
-    */
     /// Returns (filename, shard_number) for meshes and skeletons.
     /// Images require a different scheme.
     pub fn compute_shard_location(&self, label: u64) -> (String, u64) {
@@ -1998,39 +1929,6 @@ impl<'a> ShardReader<'a> {
 
         (filename, shard_loc.minishard_number)
     }
-
-    /*
-    def get_indices(self, filenames, path="", progress=None):
-        filenames = toiter(filenames)
-        filenames = [ self.meta.join(path, fname) for fname in filenames ]
-        fufilled = { fname: self.shard_index_cache[fname] \
-                    for fname in filenames \
-                    if fname in self.shard_index_cache }
-
-        requests = []
-        for fname in filenames:
-            if fname in fufilled:
-                continue
-            requests.append({
-                'path': fname,
-                'local_alias': fname + '.index',
-                'start': 0,
-                'end': self.spec.index_length(),
-            })
-
-        progress = 'Shard Indices' if progress else False
-        binaries = self.cache.download_as(requests, progress=progress)
-        for (fname, start, end), content in binaries.items():
-            try:
-                index = self.decode_index(content, fname)
-                self.shard_index_cache[fname] = index
-                fufilled[fname] = index
-            except EmptyFileException:
-                self.shard_index_cache[fname] = None
-                fufilled[fname] = None
-
-        return fufilled
-    */
 
     /// For all given files, retrieves the shard index which
     /// is used for locating the appropriate minishard indices.
@@ -2086,20 +1984,6 @@ impl<'a> ShardReader<'a> {
         fulfilled
     }
 
-    /*
-    def decode_index(self, binary, filename='Shard'):
-        if binary is None or len(binary) == 0:
-        raise EmptyFileException(filename + " was zero bytes.")
-        elif len(binary) != self.spec.index_length():
-        raise SpecViolation(
-            filename + ": shard index was an incorrect length ({}) for this specification ({}).".format(
-            len(binary), self.spec.index_length()
-            ))
-
-        index = np.frombuffer(binary, dtype=np.uint64)
-        index = index.reshape( (index.size // 2, 2), order='C' )
-        return index + self.spec.index_length()
-    */
     pub fn decode_index(&self, binary: &Vec<u8>, filename: Option<String>) -> io::Result<Vec<(u64, u64)>> {
         let normalized_filename = filename.unwrap_or("Shard".to_string());
 
@@ -2129,42 +2013,6 @@ impl<'a> ShardReader<'a> {
         Ok(decoded_index)
     }
 
-    /*
-    def get_minishard_indices_for_files(self, requests, path="", progress=None):
-        fufilled_by_filename = defaultdict(dict)
-        msn_map = {}
-
-        download_requests = []
-        for filename, index, minishard_nos in requests:
-            fufilled_requests, pending_requests = self.compute_minishard_index_requests(
-                filename, index, minishard_nos, path
-            )
-            fufilled_by_filename[filename] = fufilled_requests
-            for msn, start, end in pending_requests:
-                msn_map[(basename(filename), start, end)] = msn
-
-                filepath = self.meta.join(path, filename)
-
-                download_requests.append({
-                    'path': filepath,
-                    'local_alias': '{}-{}.msi'.format(filepath, msn),
-                    'start': start,
-                    'end': end,
-                })
-
-        progress = 'Minishard Indices' if progress else False
-        results = self.cache.download_as(download_requests, progress=progress)
-
-        for (filename, start, end), content in results.items():
-            filename = basename(filename)
-            cache_key = (filename, start, end)
-            msn = msn_map[cache_key]
-            minishard_index = self.decode_minishard_index(content, filename)
-            self.minishard_index_cache[cache_key] = minishard_index
-            fufilled_by_filename[filename][msn] = minishard_index
-
-        return fufilled_by_filename
-    */
     /// Fetches the specified minishard indices for all the specified files
     /// at once. This is required to get high performance as opposed to fetching
     /// the all minishard indices for a single file.
@@ -2222,39 +2070,6 @@ impl<'a> ShardReader<'a> {
         fulfilled_by_filename
     }
 
-    /*
-    def compute_minishard_index_requests(self, filename, index, minishard_nos, path=""):
-        minishard_nos = toiter(minishard_nos)
-
-        if index is None:
-            return ({ msn: None for msn in minishard_nos }, [])
-
-        fufilled_requests = {}
-
-        byte_ranges = {}
-        for msn in minishard_nos:
-            bytes_start, bytes_end = index[msn]
-
-            # most typically: [0,0] for an incomplete shard
-            if bytes_start == bytes_end:
-                fufilled_requests[msn] = None
-                continue
-
-            bytes_start, bytes_end = int(bytes_start), int(bytes_end)
-            byte_ranges[msn] = (bytes_start, bytes_end)
-
-        full_path = self.meta.join(self.meta.cloudpath, path)
-
-        pending_requests = []
-        for msn, (bytes_start, bytes_end) in byte_ranges.items():
-            cache_key = (filename, bytes_start, bytes_end)
-            if cache_key in self.minishard_index_cache:
-                fufilled_requests[msn] = self.minishard_index_cache[cache_key]
-            else:
-                pending_requests.append((msn, bytes_start, bytes_end))
-
-        return (fufilled_requests, pending_requests)
-    */
     /// Helper method for get_minishard_indices_for_files.
     /// Computes which requests must be made over the network vs can be fufilled from LRU cache.
     pub fn compute_minishard_index_requests(&mut self, filename: String, index: &Option<Vec<(u64, u64)>>,
@@ -2303,23 +2118,6 @@ impl<'a> ShardReader<'a> {
         (fulfilled_requests, pending_requests)
     }
 
-    /*
-     def decode_minishard_index(self, minishard_index, filename=''):
-        if self.spec.minishard_index_encoding != 'raw':
-            minishard_index = compression.decompress(
-                minishard_index, encoding=self.spec.minishard_index_encoding, filename=filename
-            )
-
-        minishard_index = np.copy(np.frombuffer(minishard_index, dtype=np.uint64))
-        minishard_index = minishard_index.reshape( (3, len(minishard_index) // 3), order='C' ).T
-
-        minishard_index[:,0] = np.cumsum(minishard_index[:,0])
-        minishard_index[:,1] = np.cumsum(minishard_index[:,1])
-        minishard_index[1:,1] += np.cumsum(minishard_index[:-1,2])
-        minishard_index[:,1] += self.spec.index_length()
-
-        return minishard_index
-    */
     /// Returns [[label, offset, size], ... ] where offset and size are in bytes.
     pub fn decode_minishard_index(&self, minishard_index_bytes: &Vec<u8>, _filename: &Option<String>)
             -> Vec<(u64, u64, u64)> {
