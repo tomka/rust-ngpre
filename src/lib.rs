@@ -876,11 +876,12 @@ pub trait DefaultBlockHeaderReader<R: io::Read> {
         let bs = if limit_to_data_bounds {
             let bs = data_attrs.get_block_size(zoom_level);
             let bounds = data_attrs.bounds(zoom_level);
-            let new_bs = izip!(bs.iter(), &bounds[1], &grid_position).map(|(&a, &b, &c)| {
-                let block_start = u64::from(a) * c;
-                let block_end = cmp::min(block_start + u64::from(a), b as u64);
-                return (block_end - block_start) as u32;
-            }).collect();
+            let new_bs = izip!(bs.iter(), &bounds[0], &bounds[1], &grid_position).map(
+                |(&bsize, &min, &max, &pos)| {
+                    let block_start = i64::from(bsize) * (pos as i64 + min);
+                    let block_end = cmp::min(block_start + i64::from(bsize), max as i64);
+                    return (block_end - block_start) as u32;
+                }).collect();
             new_bs
         } else {
             data_attrs.get_block_size(zoom_level).to_vec()
