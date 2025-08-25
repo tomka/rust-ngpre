@@ -878,7 +878,7 @@ pub trait DefaultBlockHeaderReader<R: io::Read> {
             let bounds = data_attrs.bounds(zoom_level);
             let new_bs = izip!(bs.iter(), &bounds[0], &bounds[1], &grid_position).map(
                 |(&bsize, &min, &max, &pos)| {
-                    let block_start = i64::from(bsize) * (pos as i64 + min);
+                    let block_start = i64::from(bsize) * pos as i64 + min;
                     let block_end = cmp::min(block_start + i64::from(bsize), max as i64);
                     return (block_end - block_start) as u32;
                 }).collect();
